@@ -79,7 +79,6 @@
     "labels": [
       "security"
     ],
-    "prPriority": 10,
     "minimumReleaseAge": null
   }
 }
