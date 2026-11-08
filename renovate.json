@@ -1,0 +1,85 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits",
+    ":semanticCommitTypeAll(chore)",
+    ":timezone(Europe/Paris)",
+    ":configMigration",
+    "docker:pinDigests",
+    "helpers:pinGitHubActionDigests",
+    "docker:enableMajor",
+    "customManagers:dockerfileVersions",
+    "security:openssf-scorecard",
+    ":enableVulnerabilityAlertsWithAdditionalLabel(security)"
+  ],
+  "enabledManagers": [
+    "gomod",
+    "dockerfile",
+    "docker-compose",
+    "github-actions"
+  ],
+  "labels": [
+    "dependencies"
+  ],
+  "prConcurrentLimit": 3,
+  "prHourlyLimit": 2,
+  "postUpdateOptions": [
+    "gomodTidy"
+  ],
+  "packageRules": [
+    {
+      "description": "Keep Go version in go.mod and the Docker image in sync",
+      "matchPackageNames": [
+        "go",
+        "golang"
+      ],
+      "matchDatasources": [
+        "golang-version",
+        "docker",
+        "go"
+      ],
+      "groupName": "go toolchain"
+    },
+    {
+      "matchManagers": [
+        "github-actions"
+      ],
+      "groupName": "github actions"
+    },
+    {
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "matchManagers": [
+        "gomod"
+      ],
+      "groupName": "go modules (non-major)"
+    },
+    {
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "digest"
+      ],
+      "groupName": "docker images (non-major)",
+      "semanticCommitScope": "container",
+      "addLabels": [
+        "renovate/docker"
+      ]
+    }
+  ],
+  "osvVulnerabilityAlerts": true,
+  "vulnerabilityAlerts": {
+    "labels": [
+      "security"
+    ],
+    "prPriority": 10,
+    "minimumReleaseAge": null
+  }
+}
