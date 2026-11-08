@@ -1,2 +1,4 @@
 [tools]
 go = "latest"
+"pipx:zensical" = "latest"
+uv = "latest"

@@ -21,4 +21,16 @@ jobs:
           go-version: 1.27.3
 
       - name: Test
-        run: go test -v
+        run: go test -v ./...
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up tools
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+
+      - name: Build docs
+        run: mise exec -- zensical build --clean

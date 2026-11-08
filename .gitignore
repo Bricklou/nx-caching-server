@@ -1,2 +1,4 @@
 caches/*
 !caches/.gitkeep
+# Zensical output dir
+site/
