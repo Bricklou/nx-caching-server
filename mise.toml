@@ -2,3 +2,13 @@
 go = "latest"
 "pipx:zensical" = "latest"
 uv = "latest"
+
+[tasks.dev]
+description = "Run the server locally (no auth, storage in ./tmp/storage); use `mise watch dev` to reload on change"
+env = { STORAGE_DIR = "tmp/storage", PORT = "8090", CLEANUP_THRESHOLD = "1h" }
+sources = ["cmd/**/*.go", "internal/**/*.go", "go.mod", "go.sum"]
+run = "go run ./cmd/nx-caching-server"
+
+[tasks.build]
+description = "Build the server binary into ./bin"
+run = "go build -trimpath -ldflags='-s -w' -o bin/nx-caching-server ./cmd/nx-caching-server"
