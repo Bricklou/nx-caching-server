@@ -29,7 +29,7 @@ Configure the server using environment variables:
 1. Build the binary:
 
    ```bash
-   go build -o nx-caching-server ./main.go
+   go build -o nx-caching-server ./cmd/nx-caching-server
    ```
 
 2. Run it:
