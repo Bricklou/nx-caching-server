@@ -4,16 +4,20 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"nx-caching-server/internal/server"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -262,11 +266,6 @@ func CheckBearerTokenMiddleware(tokens map[[32]byte]string, next http.HandlerFun
 	}
 }
 
-func HandleHealth(w http.ResponseWriter, _ *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "OK")
-}
-
 func HandleTask(w http.ResponseWriter, req *http.Request) {
 	switch req.Method {
 	case "PUT":
@@ -343,6 +342,9 @@ func main() {
 		log.Printf("Loaded namespaces: %s", strings.Join(namespaces, ", "))
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	go func() {
 		ticker := time.NewTicker(cleanupThreshold)
 		defer ticker.Stop()
@@ -352,10 +354,25 @@ func main() {
 		}
 	}()
 
-	http.HandleFunc("/health", HandleHealth)
-	http.HandleFunc("/v1/cache/{hash}", CheckBearerTokenMiddleware(tokens, HandleTask))
-
 	port := GetEnv(portKey, "8090")
 
-	http.ListenAndServe(fmt.Sprintf(":%s", port), nil)
+	mux := server.New()
+	mux.HandleFunc("/v1/cache/{hash}", CheckBearerTokenMiddleware(tokens, HandleTask))
+
+	srv := &http.Server{
+		Addr:              ":" + port,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		srv.Shutdown(shutdownCtx)
+	}()
+
+	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		log.Fatalf("Server error: %v", err)
+	}
 }

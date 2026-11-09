@@ -181,20 +181,6 @@ func TestCheckBearerTokenMiddleware(t *testing.T) {
 	})
 }
 
-func TestHandleHealth(t *testing.T) {
-	req := httptest.NewRequest("GET", "/health", nil)
-	w := httptest.NewRecorder()
-
-	HandleHealth(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
-	}
-	if w.Body.String() != "OK" {
-		t.Errorf("expected body 'OK', got '%s'", w.Body.String())
-	}
-}
-
 func TestHandleTask(t *testing.T) {
 	tmpDir := t.TempDir()
 	os.Setenv(storageDirKey, tmpDir)
