@@ -7,4 +7,7 @@ require (
 	github.com/mattn/go-isatty v0.0.24
 )
 
-require golang.org/x/sys v0.28.0 // indirect
+require (
+	golang.org/x/sys v0.28.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1
+)

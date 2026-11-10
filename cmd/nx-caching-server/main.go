@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
+	"nx-caching-server/internal/config"
 	"nx-caching-server/internal/core"
 	"nx-caching-server/internal/server"
 	"os"
@@ -314,8 +316,32 @@ func cleanupOldRecords(cleanupThreshold time.Duration) {
 	}
 }
 
+// logConfigError logs each problem of a config file on its own line.
+func logConfigError(err error) {
+	var fileErr *config.FileError
+	if !errors.As(err, &fileErr) {
+		slog.Error("invalid configuration", slog.Any("error", err))
+		return
+	}
+
+	for _, problem := range fileErr.Problems {
+		slog.Error("invalid auth config",
+			slog.String("file", fileErr.Path),
+			slog.String("problem", problem.Error()),
+		)
+	}
+}
+
 func main() {
 	core.SetupLogger()
+
+	cfg, err := config.Load()
+	if err != nil {
+		logConfigError(err)
+		os.Exit(1)
+	}
+
+	slog.Debug("auth config", slog.Any("config", cfg.AuthConfig))
 
 	cleanupThreshold, err := time.ParseDuration(GetEnv(cleanupThresholdKey, "1h"))
 
