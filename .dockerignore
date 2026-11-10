@@ -3,3 +3,9 @@
 .github
 LICENSE
 *.json
+.git
+.env
+tmp
+bin
+site
+docs
