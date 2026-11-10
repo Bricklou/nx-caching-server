@@ -366,30 +366,89 @@ func TestVerifyExpiryFollowsTheClock(t *testing.T) {
 	}
 }
 
-func TestVerifyUnknownKeyRefetchesOnce(t *testing.T) {
+func TestVerifyUnknownKeyIsDownloadedAtMostOncePerInterval(t *testing.T) {
 	tf := newTestForge(t)
 	other := newTestForge(t)
-	v := NewVerifier(tf.config())
+	clock := time.Now()
+	v := newVerifier(tf.config(), func() time.Time { return clock })
+	unknown := func() string { return withIssuer(t, other, tf.Issuer()) }
 
 	if _, err := verify(t, v, tf.token(t, nil)); err != nil {
 		t.Fatal(err)
 	}
 	before := tf.jwksCalls.Load()
 
-	if _, err := verify(t, v, withIssuer(t, other, tf.Issuer())); err == nil {
-		t.Fatal("unknown key accepted")
+	for range 20 {
+		if _, err := verify(t, v, unknown()); err == nil {
+			t.Fatal("unknown key accepted")
+		}
 	}
-	if got := tf.jwksCalls.Load() - before; got != 1 {
-		t.Errorf("a token with an unknown key id caused %d key downloads, want 1", got)
+	if got := tf.jwksCalls.Load() - before; got != 0 {
+		t.Errorf("tokens with unknown key ids caused %d key downloads within the interval, want 0", got)
 	}
 
-	// Known keys come from the cache.
+	clock = clock.Add(minRefresh)
+	for range 20 {
+		if _, err := verify(t, v, unknown()); err == nil {
+			t.Fatal("unknown key accepted")
+		}
+	}
+	if got := tf.jwksCalls.Load() - before; got != 1 {
+		t.Errorf("tokens with unknown key ids caused %d key downloads after the interval, want 1", got)
+	}
+
+	// Known keys never need a download.
 	before = tf.jwksCalls.Load()
 	if _, err := verify(t, v, tf.token(t, nil)); err != nil {
 		t.Fatal(err)
 	}
 	if got := tf.jwksCalls.Load() - before; got != 0 {
 		t.Errorf("a valid token caused %d key downloads, want 0", got)
+	}
+}
+
+func TestVerifyConcurrentUnknownKeysShareOneDownload(t *testing.T) {
+	tf := newTestForge(t)
+	other := newTestForge(t)
+	v := NewVerifier(tf.config())
+	tokens := make([]string, 30)
+	for i := range tokens {
+		tokens[i] = withIssuer(t, other, tf.Issuer())
+	}
+
+	var wg sync.WaitGroup
+	for _, raw := range tokens {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			verify(t, v, raw)
+		}()
+	}
+	wg.Wait()
+
+	if got := tf.jwksCalls.Load(); got != 1 {
+		t.Errorf("%d concurrent tokens caused %d key downloads, want 1", len(tokens), got)
+	}
+}
+
+func TestVerifyAcceptsAKeyPublishedAfterTheLastDownload(t *testing.T) {
+	tf := newTestForge(t)
+	clock := time.Now()
+	v := newVerifier(tf.config(), func() time.Time { return clock })
+
+	// The forge rotates its key; the old key set is cached.
+	if _, err := verify(t, v, tf.token(t, nil)); err != nil {
+		t.Fatal(err)
+	}
+	rotated, err := mockoidc.RandomKeypair(2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tf.Keypair = rotated
+	clock = clock.Add(minRefresh)
+
+	if _, err := verify(t, v, tf.token(t, nil)); err != nil {
+		t.Errorf("a token signed with a rotated key was refused: %v", err)
 	}
 }
 

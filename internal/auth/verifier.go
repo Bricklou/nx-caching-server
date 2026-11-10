@@ -229,8 +229,7 @@ func (f *forgeVerifier) build(ctx context.Context) (*oidc.IDTokenVerifier, error
 	}
 
 	if f.forge.JWKSURL != "" {
-		keys := oidc.NewRemoteKeySet(base, f.forge.JWKSURL)
-		return oidc.NewVerifier(f.forge.Issuer, keys, cfg), nil
+		return oidc.NewVerifier(f.forge.Issuer, newKeySet(f.forge.JWKSURL, f.client, f.now), cfg), nil
 	}
 
 	discoveryCtx, cancel := context.WithTimeout(base, discoveryTimeout)
@@ -239,5 +238,12 @@ func (f *forgeVerifier) build(ctx context.Context) (*oidc.IDTokenVerifier, error
 	if err != nil {
 		return nil, fmt.Errorf("auth: discovery of forge %q failed: %w", f.forge.Name, err)
 	}
-	return provider.Verifier(cfg), nil
+
+	var metadata struct {
+		JWKSURI string `json:"jwks_uri"`
+	}
+	if err := provider.Claims(&metadata); err != nil || metadata.JWKSURI == "" {
+		return nil, fmt.Errorf("auth: discovery of forge %q lists no jwks_uri", f.forge.Name)
+	}
+	return oidc.NewVerifier(f.forge.Issuer, newKeySet(metadata.JWKSURI, f.client, f.now), cfg), nil
 }
