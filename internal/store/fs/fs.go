@@ -5,13 +5,11 @@ package fs
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	iofs "io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -46,10 +44,8 @@ var (
 
 // path maps a key to its file, refusing keys that could leave the root.
 func (s *Store) path(key string) (string, error) {
-	for _, segment := range strings.Split(key, "/") {
-		if segment == "" || segment == "." || segment == ".." || strings.ContainsAny(segment, `\`+"\x00") {
-			return "", fmt.Errorf("unsafe key %q", key)
-		}
+	if err := store.ValidKey(key); err != nil {
+		return "", err
 	}
 	return filepath.Join(s.root, filepath.FromSlash(key)+suffix), nil
 }

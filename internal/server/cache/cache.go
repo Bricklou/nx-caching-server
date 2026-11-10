@@ -109,7 +109,7 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	contentLength, err := strconv.ParseInt(contentLengthString, 10, 64)
-	if err != nil {
+	if err != nil || contentLength < 0 {
 		http.Error(w, "Invalid Content-Length header", http.StatusBadRequest)
 		return
 	}

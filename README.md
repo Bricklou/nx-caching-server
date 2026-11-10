@@ -51,7 +51,9 @@ The server is configured with environment variables. The main ones:
 | Variable                    | Description                                                                 | Default             |
 |-----------------------------|-----------------------------------------------------------------------------|---------------------|
 | `PORT`                      | Port the server listens on                                                  | `8090`              |
-| `STORAGE_DIR`               | Directory for storing cache artifacts                                       | System temp dir     |
+| `STORAGE_BACKEND`           | Where entries are kept: `fs` (directory) or `s3` (S3 compatible bucket)     | `fs`                |
+| `STORAGE_DIR`               | Directory of the `fs` backend                                               | System temp dir     |
+| `S3_BUCKET`, `S3_ENDPOINT`, `S3_REGION`, `S3_PATH_STYLE`, `S3_PREFIX` | Bucket and connection of the `s3` backend (credentials: standard `AWS_*` variables) | none |
 | `AUTH_CONFIG`               | YAML file listing the trusted forges and repositories. Unset means no auth  | unset               |
 | `CLEANUP_THRESHOLD`         | Duration after which unused entries are removed                             | `1h`                |
 | `CLEANUP_THRESHOLD_TRUSTED` | Same, for the default branch and trusted branches                           | `CLEANUP_THRESHOLD` |

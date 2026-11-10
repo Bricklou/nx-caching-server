@@ -42,17 +42,35 @@ Configure the server with environment variables. All options are optional and ha
 
 ## Storage
 
-| Variable      | Description                           | Default         | Example          |
-|---------------|---------------------------------------|-----------------|------------------|
-| `STORAGE_DIR` | Directory for storing cache artifacts | System temp dir | `/data/nx-cache` |
+Entries are kept in a directory or in an S3 compatible bucket.
 
-With [authentication](#authentication) enabled, entries are stored per forge, repository and scope:
+| Variable          | Description                                                | Default         | Example          |
+|-------------------|------------------------------------------------------------|-----------------|------------------|
+| `STORAGE_BACKEND` | Where entries are kept: `fs` (directory) or `s3` (bucket)  | `fs`            | `s3`             |
+| `STORAGE_DIR`     | Directory of the `fs` backend                              | System temp dir | `/data/nx-cache` |
+
+With [authentication](#authentication) enabled, entries are stored per forge, repository and scope, as a file path with `fs` and as an object key with `s3`:
 
 ```text
-STORAGE_DIR/<forge>/<repository id>/<scope>/<hash>.cache
+<forge>/<repository id>/<scope>/<hash>.cache
 ```
 
-The scope depends on the branch that wrote the entry, so a pull request never writes the cache of the default branch. Without authentication, entries sit directly in `STORAGE_DIR`.
+The scope depends on the branch that wrote the entry, so a pull request never writes the cache of the default branch. Without authentication, entries have no prefix.
+
+### S3 backend
+
+| Variable          | Description                                                                                     | Default     | Example                 |
+|-------------------|-------------------------------------------------------------------------------------------------|-------------|-------------------------|
+| `S3_BUCKET`       | Bucket that holds the entries. Required with `STORAGE_BACKEND=s3`                               |             | `nx-cache`              |
+| `S3_ENDPOINT`     | URL of the service. Leave unset for AWS                                                         | AWS         | `http://garage:3900`    |
+| `S3_REGION`       | Region used to sign requests                                                                    | `us-east-1` | `garage`                |
+| `S3_PATH_STYLE`   | Put the bucket in the URL path instead of the host name. Most self-hosted services need it      | `false`     | `true`                  |
+| `S3_PREFIX`       | Prefix of every object key, to share a bucket. Letters, digits, `.`, `_`, `-` and `/` only      | none        | `nx/prod`               |
+
+Credentials are not read from these variables: the AWS SDK finds them in its standard sources (`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, shared credential files, instance or pod roles).
+
+!!! note "S3 behavior"
+    The first upload of a key wins: the server checks that the object is absent and sends `If-None-Match: *`. Services that ignore that header, such as Garage, only get the check, so two simultaneous uploads of the same key can both succeed and the last one stays. Entries are removed by the server's [cleanup](#cleanup-and-retention), not by bucket lifecycle rules. A download refreshes the modification time of an entry with a copy onto itself, at most four times per shortest retention.
 
 ## Cleanup and retention
 

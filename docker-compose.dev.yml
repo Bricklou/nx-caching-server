@@ -1,0 +1,14 @@
+# S3 compatible storage for local development: `mise run s3:up`, then `mise run s3:init` once.
+services:
+  garage:
+    image: dxflrs/garage:v2.5.0
+    ports:
+      - "127.0.0.1:3910:3900"
+    volumes:
+      - ./dev/garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+
+volumes:
+  garage-meta:
+  garage-data:

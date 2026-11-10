@@ -82,16 +82,18 @@ func TestUploadWithoutAuthentication(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects an invalid Content-Length", func(t *testing.T) {
-		req := httptest.NewRequest("PUT", "/badlength", bytes.NewBufferString("test"))
-		req.Header.Set("Content-Length", "many")
-		w := httptest.NewRecorder()
-		h.Routes().ServeHTTP(w, req)
+	for _, bad := range []string{"many", "-1"} {
+		t.Run("rejects the Content-Length "+bad, func(t *testing.T) {
+			req := httptest.NewRequest("PUT", "/badlength", bytes.NewBufferString("test"))
+			req.Header.Set("Content-Length", bad)
+			w := httptest.NewRecorder()
+			h.Routes().ServeHTTP(w, req)
 
-		if w.Code != http.StatusBadRequest {
-			t.Errorf("status = %d, want 400", w.Code)
-		}
-	})
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400", w.Code)
+			}
+		})
+	}
 
 	t.Run("refuses to replace an entry", func(t *testing.T) {
 		mem.set("existing", "existing", 0)

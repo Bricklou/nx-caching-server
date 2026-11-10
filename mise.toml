@@ -12,6 +12,20 @@ env = { STORAGE_DIR = "tmp/storage", CLEANUP_THRESHOLD = "1h", AUTH_ALLOW_INSECU
 sources = ["cmd/**/*.go", "internal/**/*.go", "go.mod", "go.sum"]
 run = "go run ./cmd/nx-caching-server"
 
+[tasks."dev:s3"]
+description = "Run the server locally on the dev Garage (`mise run s3:up` first)"
+env = { STORAGE_BACKEND = "s3", S3_BUCKET = "nx-cache", S3_ENDPOINT = "http://127.0.0.1:3910", S3_REGION = "garage", S3_PATH_STYLE = "true", AWS_ACCESS_KEY_ID = "GK000000000000000000000001", AWS_SECRET_ACCESS_KEY = "0000000000000000000000000000000000000000000000000000000000000002", CLEANUP_THRESHOLD = "1h", AUTH_ALLOW_INSECURE_ISSUER = "true" }
+sources = ["cmd/**/*.go", "internal/**/*.go", "go.mod", "go.sum"]
+run = "go run ./cmd/nx-caching-server"
+
+[tasks."s3:up"]
+description = "Start the dev Garage (S3 API on 127.0.0.1:3910) and create its bucket and key"
+run = ["docker compose -f docker-compose.dev.yml up -d", "dev/garage-init.sh"]
+
+[tasks."s3:down"]
+description = "Stop the dev Garage; add -- -v to delete its data"
+run = "docker compose -f docker-compose.dev.yml down"
+
 [tasks.build]
 description = "Build the server binary into ./bin"
 run = "go build -trimpath -ldflags='-s -w' -o bin/nx-caching-server ./cmd/nx-caching-server"

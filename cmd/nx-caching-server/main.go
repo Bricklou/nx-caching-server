@@ -18,19 +18,7 @@ import (
 	"nx-caching-server/internal/server/cache"
 	"nx-caching-server/internal/store"
 	"nx-caching-server/internal/store/fs"
-)
-
-func GetEnv(key, defaultValue string) string {
-	value := os.Getenv(key)
-	if value == "" {
-		return defaultValue
-	}
-	return value
-}
-
-const (
-	storageDirKey = "STORAGE_DIR"
-	portKey       = "PORT"
+	"nx-caching-server/internal/store/s3"
 )
 
 // logConfigError logs each problem of a config file on its own line.
@@ -58,6 +46,22 @@ func newVerifier(cfg config.Config) *auth.Verifier {
 	return auth.NewVerifier(cfg.AuthConfig)
 }
 
+// newStore opens the backend that STORAGE_BACKEND selects.
+func newStore(ctx context.Context, cfg config.Config) (store.Store, error) {
+	if cfg.Storage.Backend == config.BackendS3 {
+		// A read refreshes an entry at most four times per shortest retention.
+		return s3.New(ctx, cfg.Storage.S3, s3.Options{TouchAfter: cfg.Retention.Shortest() / 4})
+	}
+	return fs.New(cfg.Storage.Dir), nil
+}
+
+func describeStorage(storage config.Storage) string {
+	if storage.Backend == config.BackendS3 {
+		return "s3://" + storage.S3.Bucket
+	}
+	return storage.Dir
+}
+
 func main() {
 	core.SetupLogger()
 
@@ -68,18 +72,20 @@ func main() {
 	}
 	slog.Debug("auth config", slog.Any("config", cfg.AuthConfig))
 
-	storageDir := GetEnv(storageDirKey, os.TempDir())
-
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	var entries store.Store = fs.New(storageDir)
+	entries, err := newStore(ctx, cfg)
+	if err != nil {
+		slog.Error("cannot open the storage", slog.Any("error", err))
+		os.Exit(1)
+	}
 	if sweeper, ok := entries.(store.Sweeper); ok {
 		go cache.RunCleanup(ctx, sweeper, cfg.Retention)
 	}
 
 	srv := &http.Server{
-		Addr: ":" + GetEnv(portKey, "8090"),
+		Addr: cfg.Server.Addr(),
 		Handler: server.New(server.Options{
 			Cache:    cache.New(entries),
 			Verifier: newVerifier(cfg),
@@ -94,7 +100,7 @@ func main() {
 		srv.Shutdown(shutdownCtx)
 	}()
 
-	slog.Info("listening", slog.String("addr", srv.Addr), slog.String("storage", storageDir))
+	slog.Info("listening", slog.String("addr", srv.Addr), slog.String("storage", describeStorage(cfg.Storage)))
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		slog.Error("server error", slog.Any("error", err))
 		os.Exit(1)

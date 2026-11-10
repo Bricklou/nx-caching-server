@@ -79,7 +79,7 @@ Each repository has several caches, called scopes. A job writes to exactly one s
 | Push to any other branch                           | its own scope                | its own scope, the default scope                             |
 | Tag, `pull_request_target` or any other event      | nothing                      | the default scope                                            |
 
-A read-only job that tries to upload receives `403`. Entries are stored under `STORAGE_DIR/<forge>/<repository id>/<scope>/`, and each kind of scope has its own [retention](../configuration.md#cleanup-and-retention).
+A read-only job that tries to upload receives `403`. Entries are stored under `<forge>/<repository id>/<scope>/` in the storage directory or bucket, and each kind of scope has its own [retention](../configuration.md#cleanup-and-retention).
 
 !!! note "GitLab merge requests"
     GitLab does not send a merge request number or its target branch, so a merge request is identified by its source branch and reads its own scope and the default scope.

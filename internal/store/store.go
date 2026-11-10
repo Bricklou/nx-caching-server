@@ -5,7 +5,9 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -15,6 +17,17 @@ var (
 	// ErrExists is returned by Put when the key already holds an entry.
 	ErrExists = errors.New("entry already exists")
 )
+
+// ValidKey refuses keys with an empty or relative segment, or characters that
+// backends treat specially, so a key can never leave its backend's root.
+func ValidKey(key string) error {
+	for _, segment := range strings.Split(key, "/") {
+		if segment == "" || segment == "." || segment == ".." || strings.ContainsAny(segment, `\`+"\x00") {
+			return fmt.Errorf("unsafe key %q", key)
+		}
+	}
+	return nil
+}
 
 // Object is an open entry; the caller closes it.
 type Object struct {
