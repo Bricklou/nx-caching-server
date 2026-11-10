@@ -8,13 +8,21 @@ _.file = ".env"
 
 [tasks.dev]
 description = "Run the server locally (no auth, storage in ./tmp/storage); use `mise watch dev` to reload on change"
-env = { STORAGE_DIR = "tmp/storage", PORT = "8090", CLEANUP_THRESHOLD = "1h" }
+env = { STORAGE_DIR = "tmp/storage", CLEANUP_THRESHOLD = "1h", AUTH_ALLOW_INSECURE_ISSUER = "true" }
 sources = ["cmd/**/*.go", "internal/**/*.go", "go.mod", "go.sum"]
 run = "go run ./cmd/nx-caching-server"
 
 [tasks.build]
 description = "Build the server binary into ./bin"
 run = "go build -trimpath -ldflags='-s -w' -o bin/nx-caching-server ./cmd/nx-caching-server"
+
+[tasks."forge:serve"]
+description = "Run a fake OIDC forge on 127.0.0.1:9100 to try authentication locally"
+run = "go run ./cmd/devforge serve"
+
+[tasks."forge:token"]
+description = "Print an OIDC token from the fake forge, e.g. mise run forge:token -- gitlab pr"
+run = "go run ./cmd/devforge token"
 
 [tasks."docs:dev"]
 description = "Serves the documentation in dev mode"
