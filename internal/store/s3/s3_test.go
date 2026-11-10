@@ -14,6 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+
 	"nx-caching-server/internal/config"
 	"nx-caching-server/internal/store"
 )
@@ -142,6 +145,8 @@ func realStore(t *testing.T, touchAfter time.Duration) *Store {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Services that start empty (MinIO) have no bucket yet; an existing one is fine.
+	s.client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: &s.bucket})
 	t.Cleanup(func() {
 		s.Walk(ctx, func(e store.Entry) error { return s.Delete(ctx, e.Key) })
 	})
@@ -340,5 +345,58 @@ func TestRealRecentEntriesAreNotTouched(t *testing.T) {
 
 	if after := modTime(t, s, "x"); !after.Equal(before) {
 		t.Errorf("ModTime changed from %v to %v", before, after)
+	}
+}
+
+func TestRealDeleteMany(t *testing.T) {
+	s := realStore(t, time.Hour)
+	var keys []string
+	for i := 0; i < 5; i++ {
+		key := fmt.Sprintf("a/b/c/entry%d", i)
+		keys = append(keys, key)
+		s.Put(ctx, key, strings.NewReader("x"), 1)
+	}
+	s.Put(ctx, "keep", strings.NewReader("x"), 1)
+
+	if err := s.DeleteMany(ctx, append(keys, "a/b/c/never-existed")); err != nil {
+		t.Fatalf("DeleteMany: %v", err)
+	}
+
+	for _, key := range keys {
+		if _, err := s.Get(ctx, key); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("%s: %v", key, err)
+		}
+	}
+	if _, err := s.Get(ctx, "keep"); err != nil {
+		t.Errorf("an entry outside the batch was removed: %v", err)
+	}
+}
+
+// The service itself must refuse the second write: the existence check alone is racy.
+func TestRealServiceEnforcesIfNoneMatch(t *testing.T) {
+	s := realStore(t, time.Hour)
+	objectKey, _ := s.objectKey("conditional")
+	put := func(body string) error {
+		_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:      &s.bucket,
+			Key:         &objectKey,
+			Body:        strings.NewReader(body),
+			IfNoneMatch: aws.String("*"),
+		})
+		return err
+	}
+
+	if err := put("first"); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+	err := put("second")
+	if err == nil {
+		t.Skip("this service ignores If-None-Match; Put falls back on its existence check")
+	}
+	if !isConflict(err) {
+		t.Errorf("second write: %v, want a 412 or 409", err)
+	}
+	if got := read(t, s, "conditional"); got != "first" {
+		t.Errorf("entry = %q, want the first write", got)
 	}
 }

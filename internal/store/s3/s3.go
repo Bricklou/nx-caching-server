@@ -59,8 +59,9 @@ type Store struct {
 }
 
 var (
-	_ store.Store   = (*Store)(nil)
-	_ store.Sweeper = (*Store)(nil)
+	_ store.Store        = (*Store)(nil)
+	_ store.Sweeper      = (*Store)(nil)
+	_ store.BatchDeleter = (*Store)(nil)
 )
 
 // New connects to the bucket described by cfg. Credentials come from the AWS
@@ -133,27 +134,42 @@ func (s *Store) Put(ctx context.Context, key string, body io.Reader, size int64)
 		return err
 	}
 
-	// Services that ignore If-None-Match (Garage) only get this check, which two
-	// simultaneous writers of one key can both pass; the last write then wins.
-	_, err = s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &s.bucket, Key: &objectKey})
-	if err == nil {
-		return store.ErrExists
-	}
-	if !isNotFound(err) {
-		return err
-	}
-
+	// Services that ignore If-None-Match (Garage) only get the existence check,
+	// which two simultaneous writers of one key can both pass; the last write then wins.
 	if size <= partSize {
 		return s.putObject(ctx, objectKey, body, size)
+	}
+	if err := s.checkAbsent(ctx, objectKey); err != nil {
+		return err
 	}
 	return s.putMultipart(ctx, body, size, objectKey)
 }
 
-// putObject sends a body that fits one part in a single request.
+// checkAbsent returns store.ErrExists when the object is already there.
+func (s *Store) checkAbsent(ctx context.Context, objectKey string) error {
+	_, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &s.bucket, Key: &objectKey})
+	if err == nil {
+		return store.ErrExists
+	}
+	if isNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+// putObject sends a body that fits one part in a single request. The existence
+// check runs while the body is read, so it costs no extra round trip.
 func (s *Store) putObject(ctx context.Context, objectKey string, body io.Reader, size int64) error {
+	absent := make(chan error, 1)
+	go func() { absent <- s.checkAbsent(ctx, objectKey) }()
+
 	buf := make([]byte, size)
-	if _, err := io.ReadFull(body, buf); err != nil {
+	_, readErr := io.ReadFull(body, buf)
+	if err := <-absent; err != nil {
 		return err
+	}
+	if readErr != nil {
+		return readErr
 	}
 
 	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
@@ -308,6 +324,42 @@ func (s *Store) Delete(ctx context.Context, key string) error {
 	}
 	_, err = s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: &s.bucket, Key: &objectKey})
 	return err
+}
+
+// deleteBatch is the most keys S3 accepts in one DeleteObjects request.
+const deleteBatch = 1000
+
+func (s *Store) DeleteMany(ctx context.Context, keys []string) error {
+	var errs []error
+	for start := 0; start < len(keys); start += deleteBatch {
+		batch := keys[start:min(start+deleteBatch, len(keys))]
+
+		objects := make([]types.ObjectIdentifier, 0, len(batch))
+		for _, key := range batch {
+			objectKey, err := s.objectKey(key)
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			objects = append(objects, types.ObjectIdentifier{Key: aws.String(objectKey)})
+		}
+		if len(objects) == 0 {
+			continue
+		}
+
+		out, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+			Bucket: &s.bucket,
+			Delete: &types.Delete{Objects: objects, Quiet: aws.Bool(true)},
+		})
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		for _, failed := range out.Errors {
+			errs = append(errs, fmt.Errorf("deleting %s: %s", aws.ToString(failed.Key), aws.ToString(failed.Message)))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func isNotFound(err error) bool {

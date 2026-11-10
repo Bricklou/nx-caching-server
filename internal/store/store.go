@@ -58,6 +58,13 @@ type Sweeper interface {
 	Delete(ctx context.Context, key string) error
 }
 
+// BatchDeleter is implemented by stores that remove many entries per request.
+type BatchDeleter interface {
+	// DeleteMany removes the entries; missing ones are not errors, and a failure
+	// on one key does not stop the others.
+	DeleteMany(ctx context.Context, keys []string) error
+}
+
 // Housekeeper is implemented by stores with maintenance of their own.
 type Housekeeper interface {
 	// Housekeep removes abandoned uploads older than staleUpload and whatever

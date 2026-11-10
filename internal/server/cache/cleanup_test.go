@@ -146,6 +146,37 @@ func TestRetentionForEdgeCases(t *testing.T) {
 	}
 }
 
+// batched removes through DeleteMany and records the calls.
+type batched struct {
+	*memStore
+	calls [][]string
+}
+
+func (b *batched) DeleteMany(ctx context.Context, keys []string) error {
+	b.calls = append(b.calls, append([]string(nil), keys...))
+	for _, key := range keys {
+		b.memStore.Delete(ctx, key)
+	}
+	return nil
+}
+
+func TestCleanupDeletesInBatchesWhenTheStoreCan(t *testing.T) {
+	s := &batched{memStore: newMemStore()}
+	for i := 0; i < batchSize+5; i++ {
+		s.set("old"+strconv.Itoa(i), "x", 2*hour)
+	}
+	s.set("fresh", "x", 0)
+
+	Cleanup(ctx, s, uniform(hour))
+
+	if len(s.calls) != 2 || len(s.calls[0]) != batchSize || len(s.calls[1]) != 5 {
+		t.Errorf("batches = %d, want one of %d and one of 5", len(s.calls), batchSize)
+	}
+	if s.count() != 1 || !s.has("fresh") {
+		t.Errorf("%d entries remain, want only the fresh one", s.count())
+	}
+}
+
 // housekept records the staleness it was given.
 type housekept struct {
 	*memStore
