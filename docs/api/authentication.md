@@ -48,6 +48,7 @@ The server refuses to start on an invalid file and logs every problem it found, 
 | `issuer`   | yes      | Issuer URL, written exactly as in the `iss` claim of the tokens. It must use `https` and be unique across forges.                                    |
 | `audience` | yes      | Audience the tokens must be issued for. Choose any value and use the same one in your CI jobs.                                                       |
 | `jwks_url` | no       | URL of the key set of the forge. Without it, the server discovers it from `<issuer>/.well-known/openid-configuration`.                               |
+| `api_url`  | no       | GitLab only. Base URL the server calls to find the merge request of a pipeline, the issuer when omitted. See [GitLab merge requests](#gitlab-merge-requests). |
 | `repos`    | yes      | Allowlist of repositories, at least one. A token from any other repository is refused.                                                              |
 
 The issuer and the repository id depend on the forge:
@@ -87,7 +88,7 @@ Each repository has several caches, called scopes. A job writes to exactly one s
 A read-only job that tries to upload receives `403`. Entries are stored under `<forge>/<repository id>/<scope>/` in the storage directory or bucket, and each kind of scope has its own [retention](../configuration.md#cleanup-and-retention).
 
 !!! note "GitLab merge requests"
-    GitLab does not send a merge request number or its target branch, so a merge request is identified by its source branch and reads its own scope and the default scope.
+    A GitLab token names no merge request number and no target branch. By default a merge request is identified by its source branch, see [GitLab merge requests](#gitlab-merge-requests) for the exact scopes.
 
 ### Branch rules
 
@@ -103,6 +104,29 @@ Rules apply to branches other than the default branch, which is always trusted. 
 | `deny`      | The token is refused with `403`.                                                        |
 
 `match` lists glob patterns. `*` does not match `/`: `release/*` matches `release/1.0` but not `release/1.0/rc`. A `trusted` rule cannot be made of stars only, since it would make every branch trusted.
+
+## GitLab merge requests
+
+The ID token that GitLab gives a merge request job has no merge request number and no target branch. It only has the source branch (`ref`) and the id of the pipeline (`pipeline_id`). The server can work with that in two ways.
+
+**Without a job token** (the default), a merge request is identified by its source branch. It writes a scope named after that branch and reads it, then the default scope. Two merge requests from the same source branch share one scope, and a merge request cannot read the scope of a trusted target branch. This is safe, since both come from the same code and the same pushers.
+
+**With the job token**, the server asks GitLab which merge request the pipeline belongs to, and uses its number and target branch like any pull request: each merge request gets its own scope and reads the target branch scope when that branch is trusted. The job gives the server the means to ask: it adds its `CI_JOB_TOKEN` to the [session exchange](#long-runs-and-session-tokens).
+
+```bash
+curl -sX POST -H "Authorization: Bearer $CACHE_JWT" -H "Job-Token: $CI_JOB_TOKEN" \
+  https://cache.example.com/v1/auth/session
+```
+
+Nothing has to be configured on the server, and no secret is stored there. The server calls the GitLab at the `issuer` of the forge, or at `api_url` when it reaches GitLab at another address.
+
+- **What is asked.** Two read requests, authorized by the job token: the pipeline (`GET /projects/:id/pipelines/:pipeline_id`), which holds the merge request ref, and the merge request (`GET /projects/:id/merge_requests/:iid`), which holds the target branch. The pipeline comes from the signed ID token, so the job token only authorizes the calls: a job token of another job changes nothing, and a token GitLab refuses gives no scope. GitLab's answer is also checked against the ID token, the source branch must match.
+- **The job token is used once, and never kept.** It is not stored, not logged and not put in the session token. It stays valid for the job only, and the server only sends it to your GitLab, over `https`. It is still a credential for your project, so the exchange must go to a server you trust, as for the cache itself.
+- **Caching.** An answer is kept for one hour, a failure for 30 seconds, and concurrent exchanges of one job share one lookup. The session token carries the answer, so reading the cache afterwards does not call GitLab.
+- **Only for your repositories.** The server only asks about projects on the allowlist, so tokens from any other project cost no request.
+- **If GitLab cannot answer** (it is down, the job token is refused, the answer does not match), the session reads the default scope and **does not write**. It never falls back to a scope shared with other merge requests. Look for `could not find the merge request of a pipeline` in the logs.
+- **Without the exchange**, or without the header, nothing is asked and the source branch scope above applies.
+- **Forks.** A merge request from a fork carries the id of the fork, not yours, so it is refused as before.
 
 ## CI setup
 
@@ -140,13 +164,17 @@ Set `NX_SELF_HOSTED_REMOTE_CACHE_SERVER` to the URL of the server and `NX_SELF_H
       variables:
         NX_SELF_HOSTED_REMOTE_CACHE_SERVER: https://cache.example.com
       id_tokens:
-        NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN:
+        CACHE_JWT:
           aud: nx-cache
       script:
+        - |
+          export NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN=$(curl -sX POST \
+            -H "Authorization: Bearer $CACHE_JWT" -H "Job-Token: $CI_JOB_TOKEN" \
+            "$NX_SELF_HOSTED_REMOTE_CACHE_SERVER/v1/auth/session" | jq -r .token)
         - npx nx run-many --target=build --all
     ```
 
-    The name of the `id_tokens` entry is the name of the variable, so Nx finds the token without more work.
+    The exchange gives each merge request its own scope, see [GitLab merge requests](#gitlab-merge-requests). A GitLab token lives as long as the job, so without merge request scopes you can skip the exchange and name the `id_tokens` entry `NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN`, which Nx reads as it is.
 
 === "Forgejo Actions"
 
@@ -185,7 +213,7 @@ The observed values can change with the forge version, so decode the `exp` and `
 
 Nx reads the token once, when it starts, and cannot renew it. After the expiry the server refuses it, and **Nx stops the whole run** with `Misconfigured remote cache endpoint: Unexpected response status: 403 Forbidden`.
 
-To avoid that, the job exchanges its forge token once, before Nx starts, for a session token that lives longer. The GitHub and Forgejo snippets above do it. On Forgejo and GitLab, a job that always finishes before its token expires can skip the exchange. The exchange is one request:
+To avoid that, the job exchanges its forge token once, before Nx starts, for a session token that lives longer. The GitHub and Forgejo snippets above do it. On Forgejo, and on GitLab without merge request scopes, a job that always finishes before its token expires can skip the exchange. The exchange is one request:
 
 ```bash
 curl -sX POST -H "Authorization: Bearer $jwt" https://cache.example.com/v1/auth/session

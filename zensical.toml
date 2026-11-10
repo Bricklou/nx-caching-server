@@ -17,10 +17,12 @@ nav = [
     "getting-started/build-from-source.md",
     "getting-started/configure-nx.md",
   ] },
+  { "How the cache works" = "how-it-works.md" },
   { "Configuration" = "configuration.md" },
   { "Deployment" = [
     "deployment/docker.md",
     "deployment/docker-compose.md",
+    "deployment/s3.md",
   ] },
   { "API reference" = [
     "api/index.md",

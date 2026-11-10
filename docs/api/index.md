@@ -18,7 +18,7 @@ This endpoint is not part of the Nx specification. It exists only when [authenti
 
 ### `POST /v1/auth/session`
 
-The forge token goes in the `Authorization: Bearer` header. The request has no body.
+The forge token goes in the `Authorization: Bearer` header. The request has no body. A GitLab job can add its `CI_JOB_TOKEN` in a `Job-Token` header, so the server can find the merge request of the job, see [GitLab merge requests](authentication.md#gitlab-merge-requests).
 
 ```bash
 curl -sX POST -H "Authorization: Bearer $FORGE_TOKEN" https://cache.example.com/v1/auth/session

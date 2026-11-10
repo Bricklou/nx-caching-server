@@ -22,6 +22,7 @@ It implements the Nx OpenAPI specification (v20.8+). Since Nx 20.8 you can point
 <div class="grid cards" markdown>
 
 - [:lucide-rocket: **Getting started**](getting-started/index.md): run the server and connect your workspace.
+- [:lucide-layers: **How the cache works**](how-it-works.md): scopes, entry lifecycle, retention and limits.
 - [:lucide-settings: **Configuration**](configuration.md): environment variables and defaults.
 - [:lucide-container: **Deployment**](deployment/docker.md): Docker and Docker Compose.
 - [:lucide-plug: **API reference**](api/index.md): endpoints and authentication.
