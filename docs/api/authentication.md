@@ -13,6 +13,8 @@ The server authenticates CI jobs with the OIDC token that their git forge issues
 3. The server checks the signature against the public keys of the forge, then the issuer, the audience and the expiry, then that the repository is in your allowlist.
 4. From the branch or pull request the token describes, the server decides which cache the job may write and which caches it may read (see [Scopes](#scopes)).
 
+A forge token expires after a few minutes to an hour, depending on the forge. A job that may run longer first exchanges it for a longer-lived [session token](#long-runs-and-session-tokens), which Nx then sends in the same header.
+
 !!! warning "No authentication"
     When `AUTH_CONFIG` is not set, every client can read and write the cache, and the server logs a warning at startup.
 
@@ -54,9 +56,12 @@ The issuer and the repository id depend on the forge:
 |--------|------------------------------------------------------------|-------------------------------------------------------|
 | GitHub | `https://token.actions.githubusercontent.com`              | `gh api repos/OWNER/REPO --jq .id`                    |
 | GitLab | the URL of your instance, for example `https://gitlab.com` | the project ID, shown on the project page             |
-| Forgejo| `<instance URL>/api/actions`                               | `curl <instance URL>/api/v1/repos/OWNER/REPO` (`id`)  |
+| Forgejo| `<ROOT_URL>/api/actions`                                   | `curl <instance URL>/api/v1/repos/OWNER/REPO` (`id`)  |
 
 GitHub Enterprise Server uses its own issuer.
+
+!!! note "Forgejo issuer"
+    Forgejo builds the issuer from the `ROOT_URL` of the instance, not from the address the request came in on. Write it exactly as `ROOT_URL` is configured, including the scheme and any port. Tokens and keys are served by the instance without authentication, at `<issuer>/.well-known/openid-configuration` and `<issuer>/.well-known/keys`. For a local instance on `http`, set [`AUTH_ALLOW_INSECURE_ISSUER`](../configuration.md#authentication).
 
 ### Repository fields
 
@@ -164,13 +169,23 @@ Set `NX_SELF_HOSTED_REMOTE_CACHE_SERVER` to the URL of the server and `NX_SELF_H
           - run: npx nx run-many --target=build --all
     ```
 
-    Your Forgejo version must support Actions ID tokens.
+    Your Forgejo version must support Actions ID tokens. `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN` only exist in jobs that set `enable-openid-connect: true`. Without the `audience` parameter the token is issued for `<ROOT_URL>/<owner>`, which does not match the configured audience, so keep `&audience=nx-cache`.
 
 ## Long runs and session tokens
 
-A forge token is short-lived: about five minutes on GitHub (observed, not documented), and not documented on Forgejo. GitLab sets it to the timeout of the job, or five minutes when the job has none. Nx reads the token once, when it starts, and cannot renew it. After the expiry the server refuses it, and **Nx stops the whole run** with `Misconfigured remote cache endpoint: Unexpected response status: 403 Forbidden`.
+A forge token is short-lived:
 
-To avoid that, the job exchanges its forge token once, before Nx starts, for a session token that lives longer. The GitHub and Forgejo snippets above do it. The exchange is one request:
+| Forge   | Lifetime                                                                                     |
+|---------|----------------------------------------------------------------------------------------------|
+| GitHub  | About five minutes (observed, not documented)                                                |
+| GitLab  | The timeout of the job, or five minutes when the job has none                                |
+| Forgejo | One hour (observed on Forgejo 17, not documented)                                            |
+
+The observed values can change with the forge version, so decode the `exp` and `iat` claims of a real token if the run time matters.
+
+Nx reads the token once, when it starts, and cannot renew it. After the expiry the server refuses it, and **Nx stops the whole run** with `Misconfigured remote cache endpoint: Unexpected response status: 403 Forbidden`.
+
+To avoid that, the job exchanges its forge token once, before Nx starts, for a session token that lives longer. The GitHub and Forgejo snippets above do it. On Forgejo and GitLab, a job that always finishes before its token expires can skip the exchange. The exchange is one request:
 
 ```bash
 curl -sX POST -H "Authorization: Bearer $jwt" https://cache.example.com/v1/auth/session
