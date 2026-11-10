@@ -25,7 +25,7 @@ curl -sX POST -H "Authorization: Bearer $FORGE_TOKEN" https://cache.example.com/
 ```
 
 ```json
-{"expires_in": 7200, "token": "nxs_..."}
+{"expires_in": 21600, "token": "nxs_..."}
 ```
 
 `expires_in` is the lifetime of the session token in seconds (`SESSION_TTL`). The response is sent with `Cache-Control: no-store`. A session token carries the same repository, branch and rights as the forge token it came from, and it cannot be exchanged again.

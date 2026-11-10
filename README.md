@@ -55,7 +55,7 @@ The server is configured with environment variables. The main ones:
 | `STORAGE_DIR`               | Directory of the `fs` backend                                               | System temp dir     |
 | `S3_BUCKET`, `S3_ENDPOINT`, `S3_REGION`, `S3_PATH_STYLE`, `S3_PREFIX` | Bucket and connection of the `s3` backend (credentials: standard `AWS_*` variables) | none |
 | `AUTH_CONFIG`               | YAML file listing the trusted forges and repositories. Unset means no auth  | unset               |
-| `SESSION_TTL`, `SESSION_SECRET` | Lifetime (default `2h`) and signing key of the session tokens jobs get in exchange for their forge token | `2h`, random |
+| `SESSION_TTL`, `SESSION_SECRET` | Lifetime (default `6h`) and signing key of the session tokens jobs get in exchange for their forge token | `6h`, random |
 | `CLEANUP_THRESHOLD`         | Duration after which unused entries are removed                             | `1h`                |
 | `CLEANUP_THRESHOLD_TRUSTED` | Same, for the default branch and trusted branches                           | `CLEANUP_THRESHOLD` |
 | `CLEANUP_THRESHOLD_PR`      | Same, for pull and merge requests                                           | `CLEANUP_THRESHOLD` |

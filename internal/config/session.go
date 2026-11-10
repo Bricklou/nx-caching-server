@@ -13,7 +13,7 @@ const (
 	sessionSecretKey = "SESSION_SECRET"
 
 	// DefaultSessionTTL is how long a session token lives.
-	DefaultSessionTTL = 2 * time.Hour
+	DefaultSessionTTL = 6 * time.Hour
 
 	// minSessionSecretLength keeps the signing key out of guessing range.
 	minSessionSecretLength = 32

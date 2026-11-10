@@ -217,13 +217,13 @@ To avoid that, the job exchanges its forge token once, before Nx starts, for a s
 
 ```bash
 curl -sX POST -H "Authorization: Bearer $jwt" https://cache.example.com/v1/auth/session
-# {"expires_in":7200,"token":"nxs_..."}
+# {"expires_in":21600,"token":"nxs_..."}
 ```
 
 The session token goes in `NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN` like any other.
 
 - **Same rights.** The session carries the claims the server verified (repository, branch or pull request, actor), not the rights. Rights are worked out again on each request from the configuration, so a repository removed from the allowlist loses access at once.
-- **Bounded life.** It expires after `SESSION_TTL` (two hours by default), and it cannot be exchanged again, so it cannot renew itself. Raise `SESSION_TTL` for jobs that run longer.
+- **Bounded life.** It expires after `SESSION_TTL` (six hours by default, the longest job GitHub-hosted runners allow), and it cannot be exchanged again, so it cannot renew itself. Lower `SESSION_TTL` to the length of your longest job to shorten the time a leaked token stays usable.
 - **A forge token is needed to get one.** The exchange only accepts a valid, unexpired forge token from an allowed repository, so a token that leaked a few minutes ago cannot be turned into a session. The same rules apply as for the cache: a job that would be refused is refused here.
 - **Signing key.** Sessions are signed with `SESSION_SECRET`. Without it, the server draws a random key at startup: sessions stop working when it restarts, and several instances behind one address do not accept each other's sessions. Set the same `SESSION_SECRET` on every instance in that case.
 
