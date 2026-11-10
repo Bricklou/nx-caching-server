@@ -1,6 +1,6 @@
 // Tests the authentication middleware: header parsing, rejection, and the identity handed to handlers.
-// Verification itself is covered by the verifier tests; here a real fake forge issues the tokens.
-package auth
+// Verification itself is covered by the oidc tests; here a real fake forge issues the tokens.
+package auth_test
 
 import (
 	"net/http"
@@ -8,27 +8,30 @@ import (
 	"strings"
 	"testing"
 
+	"nx-caching-server/internal/auth"
+	"nx-caching-server/internal/auth/oidc"
+	"nx-caching-server/internal/auth/oidc/oidctest"
 	"nx-caching-server/internal/devforge"
 )
 
 type middlewareFixture struct {
-	tf       *testForge
+	tf       *oidctest.Forge
 	handler  http.Handler
 	called   int
-	identity *Identity
+	identity *auth.Identity
 }
 
 func newMiddlewareFixture(t *testing.T) *middlewareFixture {
 	t.Helper()
-	tf := newTestForge(t)
+	tf := oidctest.New(t)
 	f := &middlewareFixture{tf: tf}
 
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.called++
-		f.identity, _ = IdentityFrom(r.Context())
+		f.identity, _ = auth.IdentityFrom(r.Context())
 		w.WriteHeader(http.StatusOK)
 	})
-	f.handler = Middleware(NewVerifier(tf.config()))(next)
+	f.handler = auth.Middleware(oidc.NewVerifier(tf.Config()))(next)
 	return f
 }
 
@@ -45,12 +48,12 @@ func (f *middlewareFixture) do(header string) *httptest.ResponseRecorder {
 func TestMiddlewareAcceptsAValidToken(t *testing.T) {
 	f := newMiddlewareFixture(t)
 
-	w := f.do("Bearer " + f.tf.token(t, nil))
+	w := f.do("Bearer " + f.tf.Token(t, nil))
 
 	if w.Code != http.StatusOK || f.called != 1 {
 		t.Fatalf("status = %d, handler calls = %d", w.Code, f.called)
 	}
-	if f.identity == nil || f.identity.Repo.ID != testRepoID || f.identity.Forge.Name != "github" {
+	if f.identity == nil || f.identity.Repo.ID != oidctest.RepoID || f.identity.Forge.Name != "github" {
 		t.Errorf("identity = %+v", f.identity)
 	}
 	if f.identity.Access.WriteScope == "" {
@@ -60,7 +63,7 @@ func TestMiddlewareAcceptsAValidToken(t *testing.T) {
 
 func TestMiddlewareAcceptsTheSchemeInAnyCase(t *testing.T) {
 	f := newMiddlewareFixture(t)
-	token := f.tf.token(t, nil)
+	token := f.tf.Token(t, nil)
 
 	for _, scheme := range []string{"Bearer", "bearer", "BEARER"} {
 		if w := f.do(scheme + " " + token); w.Code != http.StatusOK {
@@ -71,8 +74,8 @@ func TestMiddlewareAcceptsTheSchemeInAnyCase(t *testing.T) {
 
 func TestMiddlewareRejects(t *testing.T) {
 	f := newMiddlewareFixture(t)
-	valid := f.tf.token(t, nil)
-	wrongAudience := f.tf.token(t, func(g *devforge.GitHubToken) { g.Audience = "other" })
+	valid := f.tf.Token(t, nil)
+	wrongAudience := f.tf.Token(t, func(g *devforge.GitHubToken) { g.Audience = "other" })
 
 	tests := []struct {
 		name   string
@@ -100,8 +103,8 @@ func TestMiddlewareRejects(t *testing.T) {
 			if f.called != before {
 				t.Error("the handler was called for a rejected request")
 			}
-			if got := strings.TrimSpace(w.Body.String()); got != messageUnauthenticated {
-				t.Errorf("body = %q, want %q", got, messageUnauthenticated)
+			if got := strings.TrimSpace(w.Body.String()); got != auth.MessageUnauthenticated {
+				t.Errorf("body = %q, want %q", got, auth.MessageUnauthenticated)
 			}
 			if got := w.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/plain") {
 				t.Errorf("Content-Type = %q, want text/plain", got)
@@ -116,12 +119,12 @@ func TestMiddlewareRejects(t *testing.T) {
 func TestIdentityFromWithoutMiddleware(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 
-	if id, ok := IdentityFrom(req.Context()); ok || id != nil {
+	if id, ok := auth.IdentityFrom(req.Context()); ok || id != nil {
 		t.Errorf("got (%+v, %v), want no identity", id, ok)
 	}
 
 	// A nil identity in the context is not an identity either.
-	if _, ok := IdentityFrom(ContextWithIdentity(req.Context(), nil)); ok {
+	if _, ok := auth.IdentityFrom(auth.ContextWithIdentity(req.Context(), nil)); ok {
 		t.Error("a nil identity was reported as present")
 	}
 }
@@ -148,10 +151,10 @@ func TestBearerToken(t *testing.T) {
 			req.Header.Set("Authorization", tt.header)
 		}
 
-		got, ok := bearerToken(req)
+		got, ok := auth.BearerToken(req)
 
 		if got != tt.want || ok != tt.ok {
-			t.Errorf("bearerToken(%q) = (%q, %v), want (%q, %v)", tt.header, got, ok, tt.want, tt.ok)
+			t.Errorf("auth.BearerToken(%q) = (%q, %v), want (%q, %v)", tt.header, got, ok, tt.want, tt.ok)
 		}
 	}
 }
@@ -163,8 +166,8 @@ func TestMiddlewareForbidsAValidTokenThatMayNotUseTheCache(t *testing.T) {
 		name  string
 		token string
 	}{
-		{"repository not in the allowlist", f.tf.token(t, func(g *devforge.GitHubToken) { g.RepoID = "999" })},
-		{"branch denied by a rule", f.tf.token(t, func(g *devforge.GitHubToken) { g.Ref = "refs/heads/forbidden/x" })},
+		{"repository not in the allowlist", f.tf.Token(t, func(g *devforge.GitHubToken) { g.RepoID = "999" })},
+		{"branch denied by a rule", f.tf.Token(t, func(g *devforge.GitHubToken) { g.Ref = "refs/heads/forbidden/x" })},
 	}
 
 	for _, tt := range tests {
@@ -179,8 +182,8 @@ func TestMiddlewareForbidsAValidTokenThatMayNotUseTheCache(t *testing.T) {
 			if f.called != before {
 				t.Error("the handler was called for a forbidden request")
 			}
-			if got := strings.TrimSpace(w.Body.String()); got != messageForbidden {
-				t.Errorf("body = %q, want the generic message %q", got, messageForbidden)
+			if got := strings.TrimSpace(w.Body.String()); got != auth.MessageForbidden {
+				t.Errorf("body = %q, want the generic message %q", got, auth.MessageForbidden)
 			}
 			if got := w.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/plain") {
 				t.Errorf("Content-Type = %q, want text/plain", got)
@@ -195,7 +198,7 @@ func TestMiddlewareForbidsAValidTokenThatMayNotUseTheCache(t *testing.T) {
 func TestMiddlewareDoesNotLeakTheReason(t *testing.T) {
 	f := newMiddlewareFixture(t)
 
-	forbidden := f.do("Bearer " + f.tf.token(t, func(g *devforge.GitHubToken) { g.RepoID = "999" }))
+	forbidden := f.do("Bearer " + f.tf.Token(t, func(g *devforge.GitHubToken) { g.RepoID = "999" }))
 	rejected := f.do("Bearer not-a-token")
 
 	for name, w := range map[string]*httptest.ResponseRecorder{"forbidden": forbidden, "rejected": rejected} {
@@ -209,9 +212,9 @@ func TestMiddlewareDoesNotLeakTheReason(t *testing.T) {
 }
 
 func TestMiddlewareUnauthenticatedStatusCanDependOnTheRequest(t *testing.T) {
-	tf := newTestForge(t)
-	handler := Middleware(NewVerifier(tf.config()),
-		WithUnauthenticatedStatus(func(r *http.Request) int {
+	tf := oidctest.New(t)
+	handler := auth.Middleware(oidc.NewVerifier(tf.Config()),
+		auth.WithUnauthenticatedStatus(func(r *http.Request) int {
 			if r.Method == http.MethodGet {
 				return http.StatusForbidden
 			}
@@ -248,7 +251,7 @@ func TestMiddlewareUnauthenticatedStatusCanDependOnTheRequest(t *testing.T) {
 
 	// A valid token still passes, whatever the method.
 	req := httptest.NewRequest("GET", "/abc", nil)
-	req.Header.Set("Authorization", "Bearer "+tf.token(t, nil))
+	req.Header.Set("Authorization", "Bearer "+tf.Token(t, nil))
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {

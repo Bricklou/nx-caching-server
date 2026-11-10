@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"nx-caching-server/internal/auth"
+	"nx-caching-server/internal/auth/oidc"
+	"nx-caching-server/internal/auth/session"
 	"nx-caching-server/internal/config"
 	"nx-caching-server/internal/core"
 	"nx-caching-server/internal/server"
@@ -37,16 +39,21 @@ func logConfigError(err error) {
 	}
 }
 
-// newVerifier returns nil, which disables authentication, when no auth config is set.
-func newVerifier(cfg config.Config) *auth.Verifier {
+// newAuth builds the authentication: forge tokens and the session tokens
+// exchanged for them. Both are nil, which disables authentication, when no auth
+// config is set.
+func newAuth(cfg config.Config) (auth.Authenticator, *session.Manager) {
 	if cfg.AuthConfig == nil {
 		slog.Warn("authentication is disabled: every client can read and write the cache")
-		return nil
+		return nil, nil
 	}
 	if len(cfg.Session.Secret) == 0 {
 		slog.Info("session tokens are signed with a random key: they stop working when the server restarts, and instances do not share them; set SESSION_SECRET to change that")
 	}
-	return auth.NewVerifier(cfg.AuthConfig, auth.WithSessions(cfg.Session.TTL, cfg.Session.Secret))
+
+	verifier := oidc.NewVerifier(cfg.AuthConfig)
+	sessions := session.New(verifier, cfg.Session.TTL, cfg.Session.Secret)
+	return auth.Chain(verifier, sessions), sessions
 }
 
 // newStore opens the backend that STORAGE_BACKEND selects.
@@ -87,11 +94,13 @@ func main() {
 		go cache.RunCleanup(ctx, sweeper, cfg.Retention)
 	}
 
+	authenticator, sessions := newAuth(cfg)
 	srv := &http.Server{
 		Addr: cfg.Server.Addr(),
 		Handler: server.New(server.Options{
-			Cache:    cache.New(entries),
-			Verifier: newVerifier(cfg),
+			Cache:         cache.New(entries),
+			Authenticator: authenticator,
+			Sessions:      sessions,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

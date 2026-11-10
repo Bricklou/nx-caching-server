@@ -1,4 +1,4 @@
-// Authenticates requests with a forge token and exposes the verified identity to the handlers.
+// Authenticates requests with a bearer token and exposes the verified identity to the handlers.
 // Failures answer 401 or 403 with a generic text message; the reason is only logged.
 package auth
 
@@ -14,8 +14,8 @@ import (
 
 // Messages shown to the client. They never say why a token was rejected.
 const (
-	messageUnauthenticated = "Missing or invalid authentication token"
-	messageForbidden       = "Access to the cache is forbidden"
+	MessageUnauthenticated = "Missing or invalid authentication token"
+	MessageForbidden       = "Access to the cache is forbidden"
 )
 
 type identityKey struct{}
@@ -47,7 +47,7 @@ func WithUnauthenticatedStatus(status func(*http.Request) int) MiddlewareOption 
 
 // Middleware rejects requests without a valid token and stores the identity in
 // the context. A valid token refused access answers 403.
-func Middleware(verifier *Verifier, opts ...MiddlewareOption) func(http.Handler) http.Handler {
+func Middleware(authenticator Authenticator, opts ...MiddlewareOption) func(http.Handler) http.Handler {
 	settings := middlewareSettings{unauthenticatedStatus: func(*http.Request) int { return http.StatusUnauthorized }}
 	for _, opt := range opts {
 		opt(&settings)
@@ -55,19 +55,19 @@ func Middleware(verifier *Verifier, opts ...MiddlewareOption) func(http.Handler)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			raw, ok := bearerToken(r)
+			raw, ok := BearerToken(r)
 			if !ok {
-				reject(w, r, settings.unauthenticatedStatus(r), messageUnauthenticated, "missing or malformed Authorization header", nil)
+				Reject(w, r, settings.unauthenticatedStatus(r), MessageUnauthenticated, "missing or malformed Authorization header", nil)
 				return
 			}
 
-			identity, err := verifier.Verify(r.Context(), raw)
+			identity, err := authenticator.Authenticate(r.Context(), raw)
 			switch {
-			case isForbidden(err):
-				reject(w, r, http.StatusForbidden, messageForbidden, "token not allowed", err)
+			case IsForbidden(err):
+				Reject(w, r, http.StatusForbidden, MessageForbidden, "token not allowed", err)
 				return
 			case err != nil:
-				reject(w, r, settings.unauthenticatedStatus(r), messageUnauthenticated, "token rejected", err)
+				Reject(w, r, settings.unauthenticatedStatus(r), MessageUnauthenticated, "token rejected", err)
 				return
 			}
 
@@ -76,13 +76,13 @@ func Middleware(verifier *Verifier, opts ...MiddlewareOption) func(http.Handler)
 	}
 }
 
-// isForbidden reports whether err means a valid token was refused access.
-func isForbidden(err error) bool {
+// IsForbidden reports whether err means a valid token was refused access.
+func IsForbidden(err error) bool {
 	return errors.Is(err, ErrRepoNotAllowed) || errors.Is(err, scope.ErrDenied)
 }
 
-// bearerToken extracts the token of an "Authorization: Bearer <token>" header.
-func bearerToken(r *http.Request) (string, bool) {
+// BearerToken extracts the token of an "Authorization: Bearer <token>" header.
+func BearerToken(r *http.Request) (string, bool) {
 	scheme, token, found := strings.Cut(r.Header.Get("Authorization"), " ")
 	if !found || !strings.EqualFold(scheme, "Bearer") || token == "" {
 		return "", false
@@ -90,8 +90,8 @@ func bearerToken(r *http.Request) (string, bool) {
 	return token, true
 }
 
-// reject answers with a generic text message. The reason goes to the log only.
-func reject(w http.ResponseWriter, r *http.Request, status int, message, reason string, err error) {
+// Reject answers with a generic text message. The reason goes to the log only.
+func Reject(w http.ResponseWriter, r *http.Request, status int, message, reason string, err error) {
 	slog.Warn("request rejected",
 		slog.Int("status", status),
 		slog.String("reason", reason),

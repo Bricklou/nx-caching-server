@@ -1,6 +1,6 @@
 // Signing keys of one forge, downloaded from its JWKS URL.
 // An unknown key id triggers at most one download per minRefresh, so bad tokens cannot make the server hammer a forge.
-package auth
+package oidc
 
 import (
 	"context"
@@ -22,7 +22,7 @@ const (
 	maxKeySetSize = 1 << 20
 )
 
-var errUnknownKey = errors.New("auth: signing key is not published by the forge")
+var errUnknownKey = errors.New("oidc: signing key is not published by the forge")
 
 // keySet verifies token signatures against the keys of a JWKS URL. It
 // implements oidc.KeySet.
@@ -94,16 +94,16 @@ func (k *keySet) refresh(ctx context.Context) error {
 	}
 	resp, err := k.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("auth: downloading the keys: %w", err)
+		return fmt.Errorf("oidc: downloading the keys: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("auth: downloading the keys: status %d", resp.StatusCode)
+		return fmt.Errorf("oidc: downloading the keys: status %d", resp.StatusCode)
 	}
 
 	var set jose.JSONWebKeySet
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxKeySetSize)).Decode(&set); err != nil {
-		return fmt.Errorf("auth: reading the keys: %w", err)
+		return fmt.Errorf("oidc: reading the keys: %w", err)
 	}
 
 	keys := make(map[string]jose.JSONWebKey, len(set.Keys))

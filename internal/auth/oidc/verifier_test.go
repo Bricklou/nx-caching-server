@@ -1,6 +1,6 @@
 // Tests token verification against a local fake forge serving discovery and JWKS.
 // Covers valid tokens, scope mapping, and every rejection path (iss, aud, exp, alg, kid, repo).
-package auth
+package oidc
 
 import (
 	"context"
@@ -18,99 +18,29 @@ import (
 
 	"github.com/oauth2-proxy/mockoidc"
 
+	"nx-caching-server/internal/auth"
+	"nx-caching-server/internal/auth/oidc/oidctest"
 	"nx-caching-server/internal/config"
 	"nx-caching-server/internal/devforge"
 	"nx-caching-server/internal/scope"
 )
 
 const (
-	testAudience = "nx-cache"
-	testRepoID   = "123456"
-	testRepoPath = "my-org/app"
+	testAudience = oidctest.Audience
+	testRepoID   = oidctest.RepoID
+	testRepoPath = oidctest.RepoPath
 )
 
-// testForge is a running fake forge plus a counter of key set downloads.
-type testForge struct {
-	*devforge.Forge
-	jwksCalls atomic.Int32
-}
-
-func newTestForge(t *testing.T, extra ...func(http.Handler) http.Handler) *testForge {
-	t.Helper()
-
-	tf := &testForge{}
-	countKeys := func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasSuffix(r.URL.Path, "jwks.json") {
-				tf.jwksCalls.Add(1)
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-
-	opts := []devforge.Option{devforge.WithMiddleware(countKeys)}
-	for _, mw := range extra {
-		opts = append(opts, devforge.WithMiddleware(mw))
-	}
-	forge, err := devforge.Run(opts...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = forge.Close() })
-
-	tf.Forge = forge
-	return tf
-}
-
-func (tf *testForge) config() *config.AuthConfig {
-	return &config.AuthConfig{Forges: []config.Forge{{
-		Name:     "github",
-		Type:     config.ForgeTypeGitHub,
-		Issuer:   tf.Issuer(),
-		Audience: testAudience,
-		Repos: []config.Repository{{
-			ID:            testRepoID,
-			Name:          testRepoPath,
-			DefaultBranch: "main",
-			BranchRules: []config.BranchRule{
-				{Match: []string{"release/*"}, Mode: config.BranchModeTrusted},
-				{Match: []string{"forbidden/*"}, Mode: config.BranchModeDeny},
-			},
-		}},
-	}}}
-}
-
-func (tf *testForge) token(t *testing.T, mutate func(*devforge.GitHubToken)) string {
-	t.Helper()
-
-	spec := devforge.GitHubToken{
-		Audience:  testAudience,
-		RepoID:    testRepoID,
-		Repo:      testRepoPath,
-		Ref:       "refs/heads/main",
-		EventName: "push",
-		Actor:     "louis",
-	}
-	if mutate != nil {
-		mutate(&spec)
-	}
-	raw, err := tf.MintGitHub(spec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return raw
-}
-
-func verify(t *testing.T, v *Verifier, raw string) (*Identity, error) {
+func verify(t *testing.T, v *Verifier, raw string) (*auth.Identity, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return v.Verify(ctx, raw)
+	return v.Authenticate(ctx, raw)
 }
 
 func TestVerifyValidTokens(t *testing.T) {
-	tf := newTestForge(t)
-	v := NewVerifier(tf.config())
+	tf := oidctest.New(t)
+	v := NewVerifier(tf.Config())
 
 	mainScope := scopeOf(t, tf, "main")
 	releaseScope := scopeOf(t, tf, "release/2.0")
@@ -162,7 +92,7 @@ func TestVerifyValidTokens(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := verify(t, v, tf.token(t, tt.mutate))
+			got, err := verify(t, v, tf.Token(t, tt.mutate))
 
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -175,9 +105,9 @@ func TestVerifyValidTokens(t *testing.T) {
 	}
 }
 
-func scopeOf(t *testing.T, tf *testForge, branch string) string {
+func scopeOf(t *testing.T, tf *oidctest.Forge, branch string) string {
 	t.Helper()
-	repo := tf.config().Forges[0].Repos[0]
+	repo := tf.Config().Forges[0].Repos[0]
 	res, err := scope.Resolve(repo, scope.Event{Kind: scope.KindPush, Branch: branch})
 	if err != nil {
 		t.Fatal(err)
@@ -186,10 +116,10 @@ func scopeOf(t *testing.T, tf *testForge, branch string) string {
 }
 
 func TestVerifyIdentityFields(t *testing.T) {
-	tf := newTestForge(t)
-	v := NewVerifier(tf.config())
+	tf := oidctest.New(t)
+	v := NewVerifier(tf.Config())
 
-	got, err := verify(t, v, tf.token(t, nil))
+	got, err := verify(t, v, tf.Token(t, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,8 +136,8 @@ func TestVerifyIdentityFields(t *testing.T) {
 }
 
 func TestVerifyNumericRepositoryID(t *testing.T) {
-	tf := newTestForge(t)
-	v := NewVerifier(tf.config())
+	tf := oidctest.New(t)
+	v := NewVerifier(tf.Config())
 
 	raw, err := tf.Mint(map[string]any{
 		"iss": tf.Issuer(), "aud": testAudience, "repository": testRepoPath,
@@ -226,7 +156,7 @@ func TestVerifyNumericRepositoryID(t *testing.T) {
 
 func TestVerifyWithJWKSURLSkipsDiscovery(t *testing.T) {
 	var discoveryCalls atomic.Int32
-	tf := newTestForge(t, func(next http.Handler) http.Handler {
+	tf := oidctest.New(t, func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if strings.Contains(r.URL.Path, "openid-configuration") {
 				discoveryCalls.Add(1)
@@ -237,11 +167,11 @@ func TestVerifyWithJWKSURLSkipsDiscovery(t *testing.T) {
 		})
 	})
 
-	cfg := tf.config()
+	cfg := tf.Config()
 	cfg.Forges[0].JWKSURL = tf.JWKSEndpoint()
 	v := NewVerifier(cfg)
 
-	if _, err := verify(t, v, tf.token(t, nil)); err != nil {
+	if _, err := verify(t, v, tf.Token(t, nil)); err != nil {
 		t.Errorf("token rejected with jwks_url set: %v", err)
 	}
 	if got := discoveryCalls.Load(); got != 0 {
@@ -250,14 +180,14 @@ func TestVerifyWithJWKSURLSkipsDiscovery(t *testing.T) {
 }
 
 func TestVerifyRejections(t *testing.T) {
-	tf := newTestForge(t)
-	other := newTestForge(t)
-	impostor := newTestForge(t)
+	tf := oidctest.New(t)
+	other := oidctest.New(t)
+	impostor := oidctest.New(t)
 	impostor.Keypair.Kid = tf.KeyID() // same key id, different key
 
 	now := time.Now()
 	clock := &now
-	v := newVerifier(tf.config(), func() time.Time { return *clock })
+	v := NewVerifier(tf.Config(), WithClock(func() time.Time { return *clock }))
 
 	tests := []struct {
 		name    string
@@ -266,12 +196,12 @@ func TestVerifyRejections(t *testing.T) {
 	}{
 		{
 			name:  "wrong audience",
-			token: func(t *testing.T) string { return tf.token(t, func(g *devforge.GitHubToken) { g.Audience = "other" }) },
+			token: func(t *testing.T) string { return tf.Token(t, func(g *devforge.GitHubToken) { g.Audience = "other" }) },
 		},
 		{
 			name: "expired",
 			token: func(t *testing.T) string {
-				return tf.token(t, func(g *devforge.GitHubToken) {
+				return tf.Token(t, func(g *devforge.GitHubToken) {
 					g.Now = now.Add(-time.Hour)
 					g.TTL = time.Minute
 				})
@@ -279,7 +209,7 @@ func TestVerifyRejections(t *testing.T) {
 		},
 		{
 			name:    "issuer not configured",
-			token:   func(t *testing.T) string { return other.token(t, nil) },
+			token:   func(t *testing.T) string { return other.Token(t, nil) },
 			wantErr: ErrUnknownIssuer,
 		},
 		{
@@ -293,29 +223,29 @@ func TestVerifyRejections(t *testing.T) {
 		{
 			name: "tampered payload",
 			token: func(t *testing.T) string {
-				return tamper(t, tf.token(t, nil), func(c map[string]any) { c["repository_id"] = "999" })
+				return tamper(t, tf.Token(t, nil), func(c map[string]any) { c["repository_id"] = "999" })
 			},
 		},
 		{
 			name:    "repository not allowed",
-			token:   func(t *testing.T) string { return tf.token(t, func(g *devforge.GitHubToken) { g.RepoID = "999" }) },
-			wantErr: ErrRepoNotAllowed,
+			token:   func(t *testing.T) string { return tf.Token(t, func(g *devforge.GitHubToken) { g.RepoID = "999" }) },
+			wantErr: auth.ErrRepoNotAllowed,
 		},
 		{
 			name:  "missing repository id",
-			token: func(t *testing.T) string { return tf.token(t, func(g *devforge.GitHubToken) { g.RepoID = "" }) },
+			token: func(t *testing.T) string { return tf.Token(t, func(g *devforge.GitHubToken) { g.RepoID = "" }) },
 		},
 		{
 			name: "branch denied by rule",
 			token: func(t *testing.T) string {
-				return tf.token(t, func(g *devforge.GitHubToken) { g.Ref = "refs/heads/forbidden/x" })
+				return tf.Token(t, func(g *devforge.GitHubToken) { g.Ref = "refs/heads/forbidden/x" })
 			},
 			wantErr: scope.ErrDenied,
 		},
 		{
 			name: "pull request with a non pull request ref",
 			token: func(t *testing.T) string {
-				return tf.token(t, func(g *devforge.GitHubToken) { g.EventName = "pull_request" })
+				return tf.Token(t, func(g *devforge.GitHubToken) { g.EventName = "pull_request" })
 			},
 		},
 		{
@@ -351,10 +281,10 @@ func TestVerifyRejections(t *testing.T) {
 }
 
 func TestVerifyExpiryFollowsTheClock(t *testing.T) {
-	tf := newTestForge(t)
+	tf := oidctest.New(t)
 	now := time.Now()
-	v := newVerifier(tf.config(), func() time.Time { return now })
-	raw := tf.token(t, func(g *devforge.GitHubToken) { g.Now, g.TTL = now, 5*time.Minute })
+	v := NewVerifier(tf.Config(), WithClock(func() time.Time { return now }))
+	raw := tf.Token(t, func(g *devforge.GitHubToken) { g.Now, g.TTL = now, 5*time.Minute })
 
 	if _, err := verify(t, v, raw); err != nil {
 		t.Fatalf("fresh token rejected: %v", err)
@@ -367,23 +297,23 @@ func TestVerifyExpiryFollowsTheClock(t *testing.T) {
 }
 
 func TestVerifyUnknownKeyIsDownloadedAtMostOncePerInterval(t *testing.T) {
-	tf := newTestForge(t)
-	other := newTestForge(t)
+	tf := oidctest.New(t)
+	other := oidctest.New(t)
 	clock := time.Now()
-	v := newVerifier(tf.config(), func() time.Time { return clock })
+	v := NewVerifier(tf.Config(), WithClock(func() time.Time { return clock }))
 	unknown := func() string { return withIssuer(t, other, tf.Issuer()) }
 
-	if _, err := verify(t, v, tf.token(t, nil)); err != nil {
+	if _, err := verify(t, v, tf.Token(t, nil)); err != nil {
 		t.Fatal(err)
 	}
-	before := tf.jwksCalls.Load()
+	before := tf.JWKSCalls.Load()
 
 	for range 20 {
 		if _, err := verify(t, v, unknown()); err == nil {
 			t.Fatal("unknown key accepted")
 		}
 	}
-	if got := tf.jwksCalls.Load() - before; got != 0 {
+	if got := tf.JWKSCalls.Load() - before; got != 0 {
 		t.Errorf("tokens with unknown key ids caused %d key downloads within the interval, want 0", got)
 	}
 
@@ -393,24 +323,24 @@ func TestVerifyUnknownKeyIsDownloadedAtMostOncePerInterval(t *testing.T) {
 			t.Fatal("unknown key accepted")
 		}
 	}
-	if got := tf.jwksCalls.Load() - before; got != 1 {
+	if got := tf.JWKSCalls.Load() - before; got != 1 {
 		t.Errorf("tokens with unknown key ids caused %d key downloads after the interval, want 1", got)
 	}
 
 	// Known keys never need a download.
-	before = tf.jwksCalls.Load()
-	if _, err := verify(t, v, tf.token(t, nil)); err != nil {
+	before = tf.JWKSCalls.Load()
+	if _, err := verify(t, v, tf.Token(t, nil)); err != nil {
 		t.Fatal(err)
 	}
-	if got := tf.jwksCalls.Load() - before; got != 0 {
+	if got := tf.JWKSCalls.Load() - before; got != 0 {
 		t.Errorf("a valid token caused %d key downloads, want 0", got)
 	}
 }
 
 func TestVerifyConcurrentUnknownKeysShareOneDownload(t *testing.T) {
-	tf := newTestForge(t)
-	other := newTestForge(t)
-	v := NewVerifier(tf.config())
+	tf := oidctest.New(t)
+	other := oidctest.New(t)
+	v := NewVerifier(tf.Config())
 	tokens := make([]string, 30)
 	for i := range tokens {
 		tokens[i] = withIssuer(t, other, tf.Issuer())
@@ -426,18 +356,18 @@ func TestVerifyConcurrentUnknownKeysShareOneDownload(t *testing.T) {
 	}
 	wg.Wait()
 
-	if got := tf.jwksCalls.Load(); got != 1 {
+	if got := tf.JWKSCalls.Load(); got != 1 {
 		t.Errorf("%d concurrent tokens caused %d key downloads, want 1", len(tokens), got)
 	}
 }
 
 func TestVerifyAcceptsAKeyPublishedAfterTheLastDownload(t *testing.T) {
-	tf := newTestForge(t)
+	tf := oidctest.New(t)
 	clock := time.Now()
-	v := newVerifier(tf.config(), func() time.Time { return clock })
+	v := NewVerifier(tf.Config(), WithClock(func() time.Time { return clock }))
 
 	// The forge rotates its key; the old key set is cached.
-	if _, err := verify(t, v, tf.token(t, nil)); err != nil {
+	if _, err := verify(t, v, tf.Token(t, nil)); err != nil {
 		t.Fatal(err)
 	}
 	rotated, err := mockoidc.RandomKeypair(2048)
@@ -447,14 +377,14 @@ func TestVerifyAcceptsAKeyPublishedAfterTheLastDownload(t *testing.T) {
 	tf.Keypair = rotated
 	clock = clock.Add(minRefresh)
 
-	if _, err := verify(t, v, tf.token(t, nil)); err != nil {
+	if _, err := verify(t, v, tf.Token(t, nil)); err != nil {
 		t.Errorf("a token signed with a rotated key was refused: %v", err)
 	}
 }
 
 func TestVerifyRetriesDiscoveryAfterTheCooldown(t *testing.T) {
 	var discoveryCalls atomic.Int32
-	tf := newTestForge(t, func(next http.Handler) http.Handler {
+	tf := oidctest.New(t, func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if strings.Contains(r.URL.Path, "openid-configuration") {
 				discoveryCalls.Add(1)
@@ -464,8 +394,8 @@ func TestVerifyRetriesDiscoveryAfterTheCooldown(t *testing.T) {
 	})
 
 	now := time.Now()
-	v := newVerifier(tf.config(), func() time.Time { return now })
-	raw := tf.token(t, func(g *devforge.GitHubToken) { g.Now = now })
+	v := NewVerifier(tf.Config(), WithClock(func() time.Time { return now }))
+	raw := tf.Token(t, func(g *devforge.GitHubToken) { g.Now = now })
 
 	// The next request to the forge, the discovery call, fails.
 	tf.QueueError(&mockoidc.ServerError{Code: http.StatusServiceUnavailable, Error: "unavailable"})
@@ -497,7 +427,7 @@ func TestVerifyRetriesDiscoveryAfterTheCooldown(t *testing.T) {
 
 func TestVerifyBuildsTheVerifierOnceUnderConcurrency(t *testing.T) {
 	var discoveryCalls atomic.Int32
-	tf := newTestForge(t, func(next http.Handler) http.Handler {
+	tf := oidctest.New(t, func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if strings.Contains(r.URL.Path, "openid-configuration") {
 				discoveryCalls.Add(1)
@@ -505,8 +435,8 @@ func TestVerifyBuildsTheVerifierOnceUnderConcurrency(t *testing.T) {
 			next.ServeHTTP(w, r)
 		})
 	})
-	v := NewVerifier(tf.config())
-	raw := tf.token(t, nil)
+	v := NewVerifier(tf.Config())
+	raw := tf.Token(t, nil)
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 32)
@@ -532,19 +462,19 @@ func TestVerifyBuildsTheVerifierOnceUnderConcurrency(t *testing.T) {
 }
 
 func TestVerifyUnsupportedForgeType(t *testing.T) {
-	tf := newTestForge(t)
-	cfg := tf.config()
+	tf := oidctest.New(t)
+	cfg := tf.Config()
 	cfg.Forges[0].Type = "bitbucket"
 	v := NewVerifier(cfg)
 
-	_, err := verify(t, v, tf.token(t, nil))
+	_, err := verify(t, v, tf.Token(t, nil))
 
 	if !errors.Is(err, ErrUnsupportedForge) {
 		t.Errorf("error = %v, want ErrUnsupportedForge", err)
 	}
 }
 
-func TestIsToken(t *testing.T) {
+func TestAccepts(t *testing.T) {
 	tests := []struct {
 		raw  string
 		want bool
@@ -558,14 +488,14 @@ func TestIsToken(t *testing.T) {
 		{"", false},
 	}
 	for _, tt := range tests {
-		if got := IsToken(tt.raw); got != tt.want {
-			t.Errorf("IsToken(%q) = %v, want %v", tt.raw, got, tt.want)
+		if got := new(Verifier).Accepts(tt.raw); got != tt.want {
+			t.Errorf("Accepts(%q) = %v, want %v", tt.raw, got, tt.want)
 		}
 	}
 }
 
 // withIssuer mints a valid-looking token from forge f that claims issuer.
-func withIssuer(t *testing.T, f *testForge, issuer string) string {
+func withIssuer(t *testing.T, f *oidctest.Forge, issuer string) string {
 	t.Helper()
 	raw, err := f.Mint(map[string]any{
 		"iss": issuer, "aud": testAudience, "repository": testRepoPath,

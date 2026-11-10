@@ -1,31 +1,33 @@
 // The endpoint that exchanges a forge token for a session token.
 // It sits outside the Nx specification, which only defines the cache routes.
-package auth
+package session
 
 import (
 	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
+
+	"nx-caching-server/internal/auth"
 )
 
-// SessionHandler answers POST requests carrying a forge token in the Authorization
+// Handler answers POST requests carrying a forge token in the Authorization
 // header with a session token. A session token cannot be exchanged again.
-func SessionHandler(verifier *Verifier) http.Handler {
+func (m *Manager) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw, ok := bearerToken(r)
+		raw, ok := auth.BearerToken(r)
 		if !ok {
-			reject(w, r, http.StatusUnauthorized, messageUnauthenticated, "missing or malformed Authorization header", nil)
+			auth.Reject(w, r, http.StatusUnauthorized, auth.MessageUnauthenticated, "missing or malformed Authorization header", nil)
 			return
 		}
 
-		session, err := verifier.Exchange(r.Context(), raw)
+		session, err := m.Exchange(r.Context(), raw)
 		switch {
-		case isForbidden(err):
-			reject(w, r, http.StatusForbidden, messageForbidden, "token not allowed", err)
+		case auth.IsForbidden(err):
+			auth.Reject(w, r, http.StatusForbidden, auth.MessageForbidden, "token not allowed", err)
 			return
 		case err != nil:
-			reject(w, r, http.StatusUnauthorized, messageUnauthenticated, "token rejected", err)
+			auth.Reject(w, r, http.StatusUnauthorized, auth.MessageUnauthenticated, "token rejected", err)
 			return
 		}
 

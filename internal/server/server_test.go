@@ -9,8 +9,11 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"nx-caching-server/internal/auth"
+	"nx-caching-server/internal/auth/oidc"
+	"nx-caching-server/internal/auth/session"
 	"nx-caching-server/internal/config"
 	"nx-caching-server/internal/devforge"
 	"nx-caching-server/internal/server/cache"
@@ -55,7 +58,7 @@ func newHarness(t *testing.T, forgeType string) *harness {
 		}},
 	}}}
 
-	handler := New(Options{Cache: cache.New(fs.New(t.TempDir())), Verifier: auth.NewVerifier(cfg)})
+	handler := newAuthenticatedHandler(t, cfg)
 	return &harness{t: t, handler: handler, forge: forge, forgeType: forgeType}
 }
 
@@ -155,7 +158,7 @@ func TestRoutePrefixes(t *testing.T) {
 	}
 }
 
-func TestWithoutAVerifierTheCacheIsOpen(t *testing.T) {
+func TestWithoutAuthenticationTheCacheIsOpen(t *testing.T) {
 	handler := New(Options{Cache: cache.New(fs.New(t.TempDir()))})
 
 	do := func(method, path, body string) *httptest.ResponseRecorder {
@@ -299,7 +302,7 @@ func TestADeniedBranchIsForbidden(t *testing.T) {
 			BranchRules: []config.BranchRule{{Match: []string{"forbidden/*"}, Mode: config.BranchModeDeny}},
 		}},
 	}}}
-	handler := New(Options{Cache: cache.New(fs.New(t.TempDir())), Verifier: auth.NewVerifier(cfg)})
+	handler := newAuthenticatedHandler(t, cfg)
 
 	raw, err := forge.Signer().MintScenario(config.ForgeTypeGitHub,
 		devforge.Scenario{Kind: devforge.ScenarioPush, Branch: "forbidden/x"},
@@ -411,4 +414,16 @@ func TestExchangeDoesNotExistWithoutAuthentication(t *testing.T) {
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", w.Code)
 	}
+}
+
+// newAuthenticatedHandler wires forge and session tokens the way main does.
+func newAuthenticatedHandler(t *testing.T, cfg *config.AuthConfig) http.Handler {
+	t.Helper()
+	verifier := oidc.NewVerifier(cfg)
+	sessions := session.New(verifier, time.Hour, nil)
+	return New(Options{
+		Cache:         cache.New(fs.New(t.TempDir())),
+		Authenticator: auth.Chain(verifier, sessions),
+		Sessions:      sessions,
+	})
 }

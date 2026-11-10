@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"nx-caching-server/internal/auth"
+	"nx-caching-server/internal/auth/session"
 	"nx-caching-server/internal/server/cache"
 	"nx-caching-server/internal/server/health"
 )
@@ -12,8 +13,10 @@ import (
 // Options holds what the server is built from.
 type Options struct {
 	Cache *cache.Handler
-	// Verifier authenticates the cache routes. Nil disables authentication.
-	Verifier *auth.Verifier
+	// Authenticator authenticates the cache routes. Nil disables authentication.
+	Authenticator auth.Authenticator
+	// Sessions serves the exchange of forge tokens for session tokens. Nil omits the endpoint.
+	Sessions *session.Manager
 }
 
 // New builds the HTTP handler. /health is public, the cache routes sit behind
@@ -25,17 +28,16 @@ func New(opts Options) http.Handler {
 
 	// Authentication wraps the prefix handling so it logs the full request path.
 	cacheRoutes := http.StripPrefix("/v1/cache", opts.Cache.Routes())
-	if opts.Verifier != nil {
+	if opts.Authenticator != nil {
 		cacheRoutes = auth.Middleware(
-			opts.Verifier,
+			opts.Authenticator,
 			auth.WithUnauthenticatedStatus(cache.UnauthenticatedStatus),
 		)(cacheRoutes)
 	}
 	root.Handle("/v1/cache/", cacheRoutes)
 
-	// The exchange needs authentication to exist: it trades a forge token.
-	if opts.Verifier != nil {
-		root.Handle("POST /v1/auth/session", auth.SessionHandler(opts.Verifier))
+	if opts.Sessions != nil {
+		root.Handle("POST /v1/auth/session", opts.Sessions.Handler())
 	}
 
 	return chain(root, recovery, requestLog)

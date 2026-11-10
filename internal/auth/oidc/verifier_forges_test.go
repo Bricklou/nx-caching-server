@@ -1,27 +1,22 @@
 // Verifies GitLab and Forgejo tokens end to end against the local fake forge.
 // Expected scopes are computed from the scope resolver so only the claim mapping is under test.
-package auth
+package oidc
 
 import (
 	"errors"
 	"reflect"
 	"testing"
 
+	"nx-caching-server/internal/auth"
+	"nx-caching-server/internal/auth/oidc/oidctest"
 	"nx-caching-server/internal/config"
 	"nx-caching-server/internal/devforge"
 	"nx-caching-server/internal/scope"
 )
 
-// configOfType is the test forge config with another forge type.
-func (tf *testForge) configOfType(forgeType string) *config.AuthConfig {
-	cfg := tf.config()
-	cfg.Forges[0].Type = forgeType
-	return cfg
-}
-
-func wantScopes(t *testing.T, tf *testForge, ev scope.Event) scope.Access {
+func wantScopes(t *testing.T, tf *oidctest.Forge, ev scope.Event) scope.Access {
 	t.Helper()
-	res, err := scope.Resolve(tf.config().Forges[0].Repos[0], ev)
+	res, err := scope.Resolve(tf.Config().Forges[0].Repos[0], ev)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,8 +24,8 @@ func wantScopes(t *testing.T, tf *testForge, ev scope.Event) scope.Access {
 }
 
 func TestVerifyGitLab(t *testing.T) {
-	tf := newTestForge(t)
-	v := NewVerifier(tf.configOfType(config.ForgeTypeGitlab))
+	tf := oidctest.New(t)
+	v := NewVerifier(tf.ConfigOfType(config.ForgeTypeGitlab))
 
 	token := func(t *testing.T, mutate func(*devforge.GitLabToken)) string {
 		t.Helper()
@@ -94,8 +89,8 @@ func TestVerifyGitLab(t *testing.T) {
 
 	t.Run("project not allowed", func(t *testing.T) {
 		_, err := verify(t, v, token(t, func(g *devforge.GitLabToken) { g.ProjectID = "999" }))
-		if !errors.Is(err, ErrRepoNotAllowed) {
-			t.Errorf("error = %v, want ErrRepoNotAllowed", err)
+		if !errors.Is(err, auth.ErrRepoNotAllowed) {
+			t.Errorf("error = %v, want auth.ErrRepoNotAllowed", err)
 		}
 	})
 
@@ -114,8 +109,8 @@ func TestVerifyGitLab(t *testing.T) {
 }
 
 func TestVerifyForgejo(t *testing.T) {
-	tf := newTestForge(t)
-	v := NewVerifier(tf.configOfType(config.ForgeTypeForgejo))
+	tf := oidctest.New(t)
+	v := NewVerifier(tf.ConfigOfType(config.ForgeTypeForgejo))
 
 	repoID := int64(123456) // numeric on Forgejo
 	token := func(t *testing.T, mutate func(*devforge.ForgejoToken)) string {
@@ -182,8 +177,8 @@ func TestVerifyForgejo(t *testing.T) {
 
 	t.Run("repository not allowed", func(t *testing.T) {
 		_, err := verify(t, v, token(t, func(f *devforge.ForgejoToken) { f.RepoID = 999 }))
-		if !errors.Is(err, ErrRepoNotAllowed) {
-			t.Errorf("error = %v, want ErrRepoNotAllowed", err)
+		if !errors.Is(err, auth.ErrRepoNotAllowed) {
+			t.Errorf("error = %v, want auth.ErrRepoNotAllowed", err)
 		}
 	})
 }
