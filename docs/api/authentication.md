@@ -242,26 +242,3 @@ The status codes follow the Nx specification:
 
 The response body is a generic message. The reason is only written to the server logs, in a `request rejected` line.
 
-## Try it locally
-
-From a checkout of the repository, a fake forge issues tokens without any CI job:
-
-```bash
-mise run forge:serve                       # prints a configuration snippet
-```
-
-Save the snippet in a file and start the server with it. The fake forge uses `http`, which the server only accepts when you allow it:
-
-```bash
-AUTH_CONFIG=auth.yaml AUTH_ALLOW_INSECURE_ISSUER=true go run ./cmd/nx-caching-server
-```
-
-Then print a token for a situation and use it:
-
-```bash
-mise run forge:token -- github pr --number 7      # push, pr, tag or untrusted; github, gitlab or forgejo
-curl -X PUT -H "Authorization: Bearer $TOKEN" --data-binary hello localhost:8090/v1/cache/abc
-```
-
-!!! danger
-    `AUTH_ALLOW_INSECURE_ISSUER` is for development. The fake forge signs with a key that is public. Never set it on a server that is reachable by others.

@@ -28,6 +28,7 @@ nav = [
     "api/index.md",
     "api/authentication.md",
   ] },
+  { "Development" = "development.md" },
   { "License" = "license.md" },
 ]
 
