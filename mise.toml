@@ -15,3 +15,7 @@ run = "go run ./cmd/nx-caching-server"
 [tasks.build]
 description = "Build the server binary into ./bin"
 run = "go build -trimpath -ldflags='-s -w' -o bin/nx-caching-server ./cmd/nx-caching-server"
+
+[tasks."docs:dev"]
+description = "Serves the documentation in dev mode"
+run = "zensical serve"
