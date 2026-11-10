@@ -103,9 +103,8 @@ func (v *Verifier) forgeFor(raw string) (*forgeVerifier, error) {
 	return fv, nil
 }
 
-// peekIssuer reads the issuer of a token that is not verified yet. It only
-// selects which configured forge verifies the token; the verifier then checks
-// the issuer again against the signed payload.
+// peekIssuer reads the issuer of an unverified token to pick the forge that
+// verifies it; the verifier checks the issuer again.
 func peekIssuer(raw string) (string, error) {
 	parts := strings.Split(raw, ".")
 	if len(parts) != 3 {
@@ -190,9 +189,8 @@ func (f *forgeVerifier) repository(id string) (config.Repository, bool) {
 	return config.Repository{}, false
 }
 
-// get returns the OIDC verifier. It is built on first use and then returned
-// without locking. A failed discovery is remembered for discoveryCooldown, so
-// requests fail fast instead of each waiting for the forge.
+// get returns the OIDC verifier, built on first use then read without a lock. A
+// failed discovery is remembered for discoveryCooldown so requests fail fast.
 func (f *forgeVerifier) get(ctx context.Context) (*oidc.IDTokenVerifier, error) {
 	if verifier := f.verifier.Load(); verifier != nil {
 		return verifier, nil

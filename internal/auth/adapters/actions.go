@@ -25,13 +25,8 @@ type actionsClaims struct {
 	Actor        string     `json:"actor"`
 }
 
-// actionsAdapter treats push-like events on a branch as pushes, same-repository
-// pull requests as pull requests, and every other event (tags,
-// pull_request_target, workflow_run, ...) as untrusted.
-//
-// No forge reports the pull request number as a claim. It is read from ref
-// (refs/pull/N/merge) when the ref has that shape, otherwise the source branch
-// (head_ref) identifies the pull request.
+// actionsAdapter maps pushes and same-repository pull requests; other events are
+// untrusted. The pull request number comes from refs/pull/N/merge, else head_ref.
 func actionsAdapter(payload []byte) (Claims, error) {
 	var raw actionsClaims
 	if err := json.Unmarshal(payload, &raw); err != nil {

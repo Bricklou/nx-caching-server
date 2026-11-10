@@ -3,7 +3,9 @@
 package cache
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,9 +19,8 @@ import (
 // never served and are removed by cleanup once stale.
 const tempInfix = ".tmp-"
 
-// validHash allows only characters that cannot form path separators or
-// traversal sequences, so the hash is always a single file name. The forge
-// name and repository id of an identity are held to the same rule.
+// validHash admits only characters that cannot form path separators or
+// traversal, so a hash, forge name or repository id is one path segment.
 var validHash = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 // access lists the directories a request may read, in lookup order, and the
@@ -29,9 +30,8 @@ type access struct {
 	write string
 }
 
-// accessFor maps the caller's identity to directories:
-// <dir>/<forge>/<repository id>/<scope>. Every segment is checked, since the
-// result is joined into a path.
+// accessFor maps the caller's identity to <dir>/<forge>/<repository id>/<scope>,
+// checking every segment since the result is joined into a path.
 func (h *Handler) accessFor(r *http.Request) (access, error) {
 	id, ok := auth.IdentityFrom(r.Context())
 	if !ok {
@@ -65,13 +65,30 @@ func entryPath(dir, hash string) string {
 	return filepath.Join(dir, hash+".cache")
 }
 
-// publishFile atomically makes tmpPath visible as finalPath without replacing
-// an existing entry (os.IsExist is true in that case). It falls back to rename
-// on filesystems without hard link support.
+// publishFile atomically makes tmpPath visible as finalPath without replacing an
+// entry (os.IsExist), and falls back to rename without hard link support.
 func publishFile(tmpPath, finalPath string) error {
 	err := os.Link(tmpPath, finalPath)
 	if err == nil || os.IsExist(err) {
 		return err
 	}
 	return os.Rename(tmpPath, finalPath)
+}
+
+// createTemp creates a temp file in dir, creating dir first and retrying if
+// cleanup removed it in between.
+func createTemp(dir, pattern string) (*os.File, error) {
+	var err error
+	for range 3 {
+		if err = os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+
+		var file *os.File
+		file, err = os.CreateTemp(dir, pattern)
+		if err == nil || !errors.Is(err, fs.ErrNotExist) {
+			return file, err
+		}
+	}
+	return nil, err
 }

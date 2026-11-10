@@ -19,10 +19,8 @@ type gitlabClaims struct {
 	UserLogin      string     `json:"user_login"`
 }
 
-// gitlabAdapter differs from the GitHub style in three ways: ref is a plain
-// branch name, a merge request has neither a number nor a target branch claim,
-// and in a merge request pipeline project_id is the source project, so a fork
-// carries its own id and fails the repository allowlist.
+// gitlabAdapter reads ref as a plain branch name. A merge request has no number
+// or target claim, and its project_id is the source project, so a fork fails the allowlist.
 func gitlabAdapter(payload []byte) (Claims, error) {
 	var raw gitlabClaims
 	if err := json.Unmarshal(payload, &raw); err != nil {

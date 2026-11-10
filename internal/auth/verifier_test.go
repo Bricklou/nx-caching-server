@@ -553,7 +553,7 @@ func hs256(t *testing.T, issuer, kid string) string {
 	return signingInput + "." + b64(mac.Sum(nil))
 }
 
-// tamper rewrites the payload of a signed token and keeps the old signature.
+// tamper rewrites the payload of a signed token and keeps the original signature.
 func tamper(t *testing.T, raw string, mutate func(map[string]any)) string {
 	t.Helper()
 	parts := strings.Split(raw, ".")

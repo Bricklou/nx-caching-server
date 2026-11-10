@@ -144,10 +144,8 @@ func warnInsecure(config *AuthConfig) {
 		slog.Any("insecure_forges", insecure))
 }
 
-// ParseAuthConfig decodes exactly one YAML document and rejects unknown keys,
-// without validating the content. An empty document is an error so a blank
-// file can never disable auth. Tools that read a development config use it
-// directly; the server goes through decodeAuthConfig.
+// ParseAuthConfig decodes one YAML document, rejecting unknown keys and an
+// empty document, without validating the content. decodeAuthConfig adds validation.
 func ParseAuthConfig(r io.Reader) (*AuthConfig, error) {
 	decoder := yaml.NewDecoder(r)
 	decoder.KnownFields(true)

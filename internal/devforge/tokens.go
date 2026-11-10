@@ -78,9 +78,8 @@ func (s *Signer) MintGitHub(t GitHubToken) (string, error) {
 	return s.Mint(claims)
 }
 
-// GitLabToken describes a GitLab CI ID token. GitLab sends ids as strings and
-// `ref` as a plain branch name; in a merge request pipeline `ref` is the source
-// branch and no merge request number or target branch claim exists.
+// GitLabToken describes a GitLab CI ID token. Ids are strings, ref is a plain
+// branch name, and a merge request has no number or target claim.
 type GitLabToken struct {
 	Audience       string
 	ProjectID      string

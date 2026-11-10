@@ -27,9 +27,8 @@ func GetEnv(key, defaultValue string) string {
 }
 
 const (
-	storageDirKey       = "STORAGE_DIR"
-	cleanupThresholdKey = "CLEANUP_THRESHOLD"
-	portKey             = "PORT"
+	storageDirKey = "STORAGE_DIR"
+	portKey       = "PORT"
 )
 
 // logConfigError logs each problem of a config file on its own line.
@@ -67,17 +66,12 @@ func main() {
 	}
 	slog.Debug("auth config", slog.Any("config", cfg.AuthConfig))
 
-	cleanupThreshold, err := time.ParseDuration(GetEnv(cleanupThresholdKey, "1h"))
-	if err != nil {
-		slog.Error("invalid cleanup threshold", slog.Any("error", err))
-		os.Exit(1)
-	}
 	storageDir := GetEnv(storageDirKey, os.TempDir())
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	go cache.RunCleanup(ctx, storageDir, cleanupThreshold)
+	go cache.RunCleanup(ctx, storageDir, cfg.Retention)
 
 	srv := &http.Server{
 		Addr: ":" + GetEnv(portKey, "8090"),

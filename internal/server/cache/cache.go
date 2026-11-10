@@ -35,9 +35,8 @@ func (h *Handler) Routes() http.Handler {
 	return mux
 }
 
-// UnauthenticatedStatus is the status answering a request that has no valid
-// token. The Nx remote cache specification lists 401 for uploads only, and 403
-// for downloads.
+// UnauthenticatedStatus answers a request without a valid token: the Nx
+// specification lists 401 for uploads and 403 for downloads.
 func UnauthenticatedStatus(r *http.Request) int {
 	if r.Method == http.MethodGet {
 		return http.StatusForbidden
@@ -135,14 +134,9 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := os.MkdirAll(acc.write, 0o755); err != nil {
-		http.Error(w, "Failed to create file", http.StatusInternalServerError)
-		return
-	}
-
 	// Write to a temp file and publish it atomically so that concurrent
 	// downloads never observe a partially written entry.
-	file, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+tempInfix+"*")
+	file, err := createTemp(acc.write, filepath.Base(path)+tempInfix+"*")
 	if err != nil {
 		http.Error(w, "Failed to create file", http.StatusInternalServerError)
 		return

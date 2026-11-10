@@ -84,7 +84,7 @@ func (f *Forge) KeyID() string {
 }
 
 // Signer returns a signer for this forge. It reads the key and clock of the
-// server on each use, so FastForward and a replaced Kid apply.
+// server on each use, so FastForward and a modified Kid apply.
 func (f *Forge) Signer() *Signer {
 	return &Signer{issuer: f.Issuer(), keypair: f.Keypair, now: f.Now}
 }

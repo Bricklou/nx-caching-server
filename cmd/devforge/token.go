@@ -132,9 +132,8 @@ func resolveTarget(forgeType string, opts options) (target, error) {
 	return dest, nil
 }
 
-// targetFromConfig parses the file as the server does but skips validation,
-// since a development config uses an http issuer that validation rejects by
-// default.
+// targetFromConfig parses the file like the server but skips validation, which
+// rejects the http issuer of a development config.
 func targetFromConfig(path, forgeType string) (target, error) {
 	file, err := os.Open(path)
 	if err != nil {

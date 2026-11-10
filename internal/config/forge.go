@@ -62,9 +62,8 @@ func (m BranchMode) valid() bool {
 	return false
 }
 
-// ModeFor returns the mode applying to branch and the index of the matching
-// rule, or -1 when the mode is implicit: the default branch is always
-// trusted and unmatched branches are isolated.
+// ModeFor returns the mode of branch and the index of its rule, or -1 when it is
+// implicit: the default branch is trusted, unmatched branches are isolated.
 func (r Repository) ModeFor(branch string) (BranchMode, int) {
 	if branch == r.DefaultBranch {
 		return BranchModeTrusted, -1

@@ -25,9 +25,8 @@ func ContextWithIdentity(ctx context.Context, id *Identity) context.Context {
 	return context.WithValue(ctx, identityKey{}, id)
 }
 
-// IdentityFrom returns the identity set by Middleware. It reports false when
-// the request was not authenticated, which is the case when authentication is
-// disabled.
+// IdentityFrom returns the identity set by Middleware, or false when the request
+// is not authenticated, which includes disabled authentication.
 func IdentityFrom(ctx context.Context) (*Identity, bool) {
 	id, ok := ctx.Value(identityKey{}).(*Identity)
 	return id, ok && id != nil
@@ -46,9 +45,8 @@ func WithUnauthenticatedStatus(status func(*http.Request) int) MiddlewareOption 
 	return func(s *middlewareSettings) { s.unauthenticatedStatus = status }
 }
 
-// Middleware rejects requests without a valid token and stores the verified
-// identity in the request context. A valid token that is not allowed to use the
-// cache (unlisted repository, denied branch) answers 403.
+// Middleware rejects requests without a valid token and stores the identity in
+// the context. A valid token refused access answers 403.
 func Middleware(verifier *Verifier, opts ...MiddlewareOption) func(http.Handler) http.Handler {
 	settings := middlewareSettings{unauthenticatedStatus: func(*http.Request) int { return http.StatusUnauthorized }}
 	for _, opt := range opts {
