@@ -3,23 +3,23 @@
 package cache
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
-	"time"
+
+	"nx-caching-server/internal/store"
 )
 
-// Handler serves the cache entries stored under one directory.
+// Handler serves the cache entries held by a store.
 type Handler struct {
-	dir string
+	store store.Store
 }
 
-// New returns a handler storing its entries under dir.
-func New(dir string) *Handler {
-	return &Handler{dir: dir}
+// New returns a handler reading and writing entries through s.
+func New(s store.Store) *Handler {
+	return &Handler{store: s}
 }
 
 // Routes returns the routes relative to the cache prefix, so the server picks
@@ -51,14 +51,14 @@ func methodNotAllowed(w http.ResponseWriter, _ *http.Request) {
 
 // request validates the hash and resolves the directories the caller may use.
 // It answers the request itself and returns false when it cannot continue.
-func (h *Handler) request(w http.ResponseWriter, r *http.Request) (hash string, acc access, ok bool) {
+func request(w http.ResponseWriter, r *http.Request) (hash string, acc access, ok bool) {
 	hash = r.PathValue("hash")
 	if !validHash.MatchString(hash) {
 		http.Error(w, "Invalid hash", http.StatusBadRequest)
 		return "", access{}, false
 	}
 
-	acc, err := h.accessFor(r)
+	acc, err := accessFor(r)
 	if err != nil {
 		slog.Error("invalid cache access", slog.Any("error", err))
 		http.Error(w, "Failed to resolve the cache location", http.StatusInternalServerError)
@@ -68,50 +68,37 @@ func (h *Handler) request(w http.ResponseWriter, r *http.Request) (hash string, 
 }
 
 func (h *Handler) download(w http.ResponseWriter, r *http.Request) {
-	hash, acc, ok := h.request(w, r)
+	hash, acc, ok := request(w, r)
 	if !ok {
 		return
 	}
 
-	for _, dir := range acc.read {
-		path := entryPath(dir, hash)
-		file, err := os.Open(path)
-		if os.IsNotExist(err) {
+	for _, prefix := range acc.read {
+		obj, err := h.store.Get(r.Context(), entryKey(prefix, hash))
+		if errors.Is(err, store.ErrNotFound) {
 			continue
 		}
 		if err != nil {
+			slog.Error("failed to read an entry", slog.Any("error", err))
 			http.Error(w, "Failed to read the file", http.StatusInternalServerError)
 			return
 		}
-		defer file.Close()
+		defer obj.Close()
 
-		stat, err := file.Stat()
-		if err != nil {
-			http.Error(w, "Failed to read the file", http.StatusInternalServerError)
-			return
-		}
-
-		// Mark the entry as recently used so cleanup keeps it. Filesystem atime
-		// is not reliable for this (noatime/relatime mounts, Windows).
-		now := time.Now()
-		if err := os.Chtimes(path, now, now); err != nil {
-			slog.Warn("failed to update the access time", slog.String("path", path), slog.Any("error", err))
-		}
-
-		w.Header().Set("Content-Length", strconv.FormatInt(stat.Size(), 10))
+		w.Header().Set("Content-Length", strconv.FormatInt(obj.Size, 10))
 		w.Header().Set("Content-Type", "application/octet-stream")
-		io.Copy(w, file)
+		io.Copy(w, obj)
 		return
 	}
 	w.WriteHeader(http.StatusNotFound)
 }
 
 func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
-	hash, acc, ok := h.request(w, r)
+	hash, acc, ok := request(w, r)
 	if !ok {
 		return
 	}
-	if acc.write == "" {
+	if !acc.canWrite() {
 		http.Error(w, "This token can read the cache but not write to it", http.StatusForbidden)
 		return
 	}
@@ -128,42 +115,14 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The first writer of a hash wins, within the scope the caller writes.
-	path := entryPath(acc.write, hash)
-	if _, err := os.Stat(path); err == nil {
+	err = h.store.Put(r.Context(), entryKey(*acc.write, hash), r.Body, contentLength)
+	switch {
+	case errors.Is(err, store.ErrExists):
 		w.WriteHeader(http.StatusConflict)
-		return
-	}
-
-	// Write to a temp file and publish it atomically so that concurrent
-	// downloads never observe a partially written entry.
-	file, err := createTemp(acc.write, filepath.Base(path)+tempInfix+"*")
-	if err != nil {
-		http.Error(w, "Failed to create file", http.StatusInternalServerError)
-		return
-	}
-	tmpPath := file.Name()
-	defer os.Remove(tmpPath)
-
-	_, err = io.CopyN(file, r.Body, contentLength)
-	if closeErr := file.Close(); err == nil {
-		err = closeErr
-	}
-	if err == nil {
-		err = os.Chmod(tmpPath, 0o644)
-	}
-	if err != nil {
+	case err != nil:
+		slog.Error("failed to write an entry", slog.Any("error", err))
 		http.Error(w, "Failed to write file", http.StatusInternalServerError)
-		return
+	default:
+		w.WriteHeader(http.StatusOK)
 	}
-
-	if err := publishFile(tmpPath, path); err != nil {
-		if os.IsExist(err) {
-			w.WriteHeader(http.StatusConflict)
-			return
-		}
-		http.Error(w, "Failed to write file", http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
 }

@@ -13,6 +13,7 @@ import (
 	"nx-caching-server/internal/config"
 	"nx-caching-server/internal/devforge"
 	"nx-caching-server/internal/server/cache"
+	"nx-caching-server/internal/store/fs"
 )
 
 const (
@@ -53,7 +54,7 @@ func newHarness(t *testing.T, forgeType string) *harness {
 		}},
 	}}}
 
-	handler := New(Options{Cache: cache.New(t.TempDir()), Verifier: auth.NewVerifier(cfg)})
+	handler := New(Options{Cache: cache.New(fs.New(t.TempDir())), Verifier: auth.NewVerifier(cfg)})
 	return &harness{t: t, handler: handler, forge: forge, forgeType: forgeType}
 }
 
@@ -154,7 +155,7 @@ func TestRoutePrefixes(t *testing.T) {
 }
 
 func TestWithoutAVerifierTheCacheIsOpen(t *testing.T) {
-	handler := New(Options{Cache: cache.New(t.TempDir())})
+	handler := New(Options{Cache: cache.New(fs.New(t.TempDir()))})
 
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -297,7 +298,7 @@ func TestADeniedBranchIsForbidden(t *testing.T) {
 			BranchRules: []config.BranchRule{{Match: []string{"forbidden/*"}, Mode: config.BranchModeDeny}},
 		}},
 	}}}
-	handler := New(Options{Cache: cache.New(t.TempDir()), Verifier: auth.NewVerifier(cfg)})
+	handler := New(Options{Cache: cache.New(fs.New(t.TempDir())), Verifier: auth.NewVerifier(cfg)})
 
 	raw, err := forge.Signer().MintScenario(config.ForgeTypeGitHub,
 		devforge.Scenario{Kind: devforge.ScenarioPush, Branch: "forbidden/x"},

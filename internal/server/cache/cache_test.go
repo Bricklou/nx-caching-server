@@ -4,15 +4,12 @@ package cache
 
 import (
 	"bytes"
-	"io"
+	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"nx-caching-server/internal/auth"
 	"nx-caching-server/internal/scope"
@@ -43,10 +40,10 @@ func readOnlyAccess() scope.Access {
 	return scope.Access{ReadOnly: true, ReadChain: []string{mainScope}}
 }
 
-func newHandler(t *testing.T) (*Handler, string) {
+func newHandler(t *testing.T) (*Handler, *memStore) {
 	t.Helper()
-	dir := t.TempDir()
-	return New(dir), dir
+	mem := newMemStore()
+	return New(mem), mem
 }
 
 // do sends a request through the routes, as the server does after stripping the prefix.
@@ -63,24 +60,15 @@ func do(h *Handler, method, hash, body string, id *auth.Identity) *httptest.Resp
 	return w
 }
 
-func exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
 func TestUploadWithoutAuthentication(t *testing.T) {
-	h, dir := newHandler(t)
+	h, mem := newHandler(t)
 
-	t.Run("stores the entry in the storage directory", func(t *testing.T) {
+	t.Run("stores the entry under the hash alone", func(t *testing.T) {
 		if w := do(h, "PUT", "testhash", "test content", nil); w.Code != http.StatusOK {
 			t.Fatalf("status = %d", w.Code)
 		}
-		got, err := os.ReadFile(filepath.Join(dir, "testhash.cache"))
-		if err != nil || string(got) != "test content" {
-			t.Errorf("stored (%q, %v)", got, err)
-		}
-		if info, _ := os.Stat(filepath.Join(dir, "testhash.cache")); info.Mode().Perm() != 0o644 {
-			t.Errorf("mode = %v, want 0644", info.Mode().Perm())
+		if got := mem.content("testhash"); got != "test content" {
+			t.Errorf("stored %q", got)
 		}
 	})
 
@@ -106,20 +94,20 @@ func TestUploadWithoutAuthentication(t *testing.T) {
 	})
 
 	t.Run("refuses to replace an entry", func(t *testing.T) {
-		os.WriteFile(filepath.Join(dir, "existing.cache"), []byte("existing"), 0o644)
+		mem.set("existing", "existing", 0)
 
 		if w := do(h, "PUT", "existing", "new content", nil); w.Code != http.StatusConflict {
 			t.Errorf("status = %d, want 409", w.Code)
 		}
-		if got, _ := os.ReadFile(filepath.Join(dir, "existing.cache")); string(got) != "existing" {
+		if got := mem.content("existing"); got != "existing" {
 			t.Errorf("entry was replaced: %q", got)
 		}
 	})
 }
 
 func TestDownloadWithoutAuthentication(t *testing.T) {
-	h, dir := newHandler(t)
-	os.WriteFile(filepath.Join(dir, "testhash.cache"), []byte("test content"), 0o644)
+	h, mem := newHandler(t)
+	mem.set("testhash", "test content", 0)
 
 	t.Run("downloads an entry", func(t *testing.T) {
 		w := do(h, "GET", "testhash", "", nil)
@@ -160,11 +148,7 @@ func TestUnsupportedMethod(t *testing.T) {
 }
 
 func TestInvalidHashRejected(t *testing.T) {
-	root := t.TempDir()
-	storage := filepath.Join(root, "storage")
-	os.Mkdir(storage, 0o755)
-	os.WriteFile(filepath.Join(root, "secret.cache"), []byte("secret"), 0o644)
-	h := New(storage)
+	h, mem := newHandler(t)
 
 	handlers := map[string]http.HandlerFunc{"PUT": h.upload, "GET": h.download}
 	hashes := []string{"../secret", "../../etc/x", "a/b", `a\b`, "..", ".", "", "a.b", strings.Repeat("a", 129)}
@@ -189,8 +173,8 @@ func TestInvalidHashRejected(t *testing.T) {
 		}
 	}
 
-	if exists(filepath.Join(root, "x.cache")) || exists(filepath.Join(storage, "x.cache")) {
-		t.Error("a file was created for an invalid hash")
+	if mem.count() != 0 {
+		t.Error("an entry was created for an invalid hash")
 	}
 }
 
@@ -205,18 +189,17 @@ func TestPathTraversalThroughTheRoutes(t *testing.T) {
 }
 
 func TestEntriesLiveUnderForgeRepositoryAndScope(t *testing.T) {
-	h, dir := newHandler(t)
+	h, mem := newHandler(t)
 
 	if w := do(h, "PUT", "abc", "one", ident("123", prAccess("7"))); w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
 
-	want := filepath.Join(dir, "github", "123", "pr-7", "abc.cache")
-	if got, err := os.ReadFile(want); err != nil || string(got) != "one" {
-		t.Errorf("entry at %s = (%q, %v)", want, got, err)
+	if got := mem.content("github/123/pr-7/abc"); got != "one" {
+		t.Errorf("entry at github/123/pr-7/abc = %q", got)
 	}
-	if exists(filepath.Join(dir, "abc.cache")) {
-		t.Error("an authenticated upload reached the flat directory")
+	if mem.has("abc") {
+		t.Error("an authenticated upload reached the unscoped key")
 	}
 }
 
@@ -280,11 +263,11 @@ func TestOwnScopeWinsOverTheDefaultScope(t *testing.T) {
 }
 
 func TestThePullRequestNeverWritesTheDefaultScope(t *testing.T) {
-	h, dir := newHandler(t)
+	h, mem := newHandler(t)
 
 	do(h, "PUT", "poison", "bad", ident("1", prAccess("9")))
 
-	if exists(filepath.Join(dir, "github", "1", mainScope, "poison.cache")) {
+	if mem.has("github/1/" + mainScope + "/poison") {
 		t.Fatal("a pull request wrote into the default scope")
 	}
 	if w := do(h, "GET", "poison", "", ident("1", mainAccess())); w.Code != http.StatusNotFound {
@@ -320,7 +303,7 @@ func TestExistingEntryInTheDefaultScopeDoesNotBlockAPullRequestUpload(t *testing
 }
 
 func TestReadOnlyCallerCannotWrite(t *testing.T) {
-	h, dir := newHandler(t)
+	h, mem := newHandler(t)
 	do(h, "PUT", "x", "from main", ident("1", mainAccess()))
 	readOnly := ident("1", readOnlyAccess())
 
@@ -334,7 +317,7 @@ func TestReadOnlyCallerCannotWrite(t *testing.T) {
 	if w := do(h, "GET", "x", "", readOnly); w.Code != http.StatusOK || w.Body.String() != "from main" {
 		t.Errorf("a read only caller reads the default scope: %d %q", w.Code, w.Body.String())
 	}
-	if exists(filepath.Join(dir, "github", "1", mainScope, "y.cache")) {
+	if mem.has("github/1/" + mainScope + "/y") {
 		t.Error("a read only caller created an entry")
 	}
 }
@@ -353,29 +336,8 @@ func TestInvalidHashBeatsReadOnly(t *testing.T) {
 	}
 }
 
-func TestReadHitRefreshesOnlyTheServingEntry(t *testing.T) {
-	h, dir := newHandler(t)
-	do(h, "PUT", "x", "from main", ident("1", mainAccess()))
-	mainEntry := filepath.Join(dir, "github", "1", mainScope, "x.cache")
-	past := time.Now().Add(-2 * time.Hour)
-	os.Chtimes(mainEntry, past, past)
-
-	do(h, "GET", "x", "", ident("1", prAccess("4")))
-
-	info, err := os.Stat(mainEntry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if time.Since(info.ModTime()) > time.Minute {
-		t.Errorf("the entry that served the read was not refreshed: %v", info.ModTime())
-	}
-	if exists(filepath.Join(dir, "github", "1", "pr-4")) {
-		t.Error("a read created the pull request scope directory")
-	}
-}
-
 func TestUnsafeIdentitiesAreRefused(t *testing.T) {
-	h, dir := newHandler(t)
+	h, mem := newHandler(t)
 
 	tests := []struct {
 		name string
@@ -399,123 +361,43 @@ func TestUnsafeIdentitiesAreRefused(t *testing.T) {
 		})
 	}
 
-	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
-		t.Errorf("unsafe identities created %v", entries)
-	}
-}
-
-// gatedReader yields its first chunk, then blocks until release is closed.
-type gatedReader struct {
-	first   []byte
-	rest    []byte
-	started chan struct{}
-	release chan struct{}
-	stage   int
-}
-
-func (g *gatedReader) Read(p []byte) (int, error) {
-	switch g.stage {
-	case 0:
-		g.stage = 1
-		n := copy(p, g.first)
-		close(g.started)
-		return n, nil
-	case 1:
-		<-g.release
-		g.stage = 2
-		n := copy(p, g.rest)
-		return n, nil
-	}
-	return 0, io.EOF
-}
-
-func TestInProgressUploadIsNotVisible(t *testing.T) {
-	h, dir := newHandler(t)
-	caller := ident("1", mainAccess())
-	scopeDir := filepath.Join(dir, "github", "1", mainScope)
-
-	body := &gatedReader{
-		first:   []byte("hello "),
-		rest:    []byte("world"),
-		started: make(chan struct{}),
-		release: make(chan struct{}),
-	}
-	put := httptest.NewRequest("PUT", "/slow", body)
-	put.Header.Set("Content-Length", "11")
-	put = put.WithContext(auth.ContextWithIdentity(put.Context(), caller))
-	putRec := httptest.NewRecorder()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		h.Routes().ServeHTTP(putRec, put)
-	}()
-	<-body.started
-
-	if w := do(h, "GET", "slow", "", caller); w.Code != http.StatusNotFound {
-		t.Errorf("GET during upload: status = %d, want 404", w.Code)
-	}
-
-	close(body.release)
-	<-done
-	if putRec.Code != http.StatusOK {
-		t.Fatalf("upload status = %d", putRec.Code)
-	}
-
-	if w := do(h, "GET", "slow", "", caller); w.Code != http.StatusOK || w.Body.String() != "hello world" {
-		t.Errorf("after upload: %d %q", w.Code, w.Body.String())
-	}
-	entries, _ := os.ReadDir(scopeDir)
-	if len(entries) != 1 || entries[0].Name() != "slow.cache" {
-		t.Errorf("expected only slow.cache, got %v", entries)
+	if mem.count() != 0 {
+		t.Error("unsafe identities created entries")
 	}
 }
 
 func TestFailedUploadLeavesNothing(t *testing.T) {
-	h, dir := newHandler(t)
+	for name, id := range map[string]*auth.Identity{"without authentication": nil, "scoped": ident("1", prAccess("1"))} {
+		t.Run(name, func(t *testing.T) {
+			h, mem := newHandler(t)
 
-	req := httptest.NewRequest("PUT", "/short", strings.NewReader("abc"))
-	req.Header.Set("Content-Length", "10")
-	w := httptest.NewRecorder()
-	h.Routes().ServeHTTP(w, req)
+			req := httptest.NewRequest("PUT", "/short", strings.NewReader("abc"))
+			req.Header.Set("Content-Length", "10")
+			if id != nil {
+				req = req.WithContext(auth.ContextWithIdentity(req.Context(), id))
+			}
+			w := httptest.NewRecorder()
+			h.Routes().ServeHTTP(w, req)
 
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("status = %d, want 500", w.Code)
-	}
-	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
-		t.Errorf("expected an empty storage directory, got %v", entries)
-	}
-}
-
-func TestFailedScopedUploadLeavesNoEntry(t *testing.T) {
-	h, dir := newHandler(t)
-
-	req := httptest.NewRequest("PUT", "/short", strings.NewReader("abc"))
-	req.Header.Set("Content-Length", "10")
-	req = req.WithContext(auth.ContextWithIdentity(req.Context(), ident("1", prAccess("1"))))
-	w := httptest.NewRecorder()
-	h.Routes().ServeHTTP(w, req)
-
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("status = %d, want 500", w.Code)
-	}
-	entries, _ := os.ReadDir(filepath.Join(dir, "github", "1", "pr-1"))
-	if len(entries) != 0 {
-		t.Errorf("a failed upload left %v", entries)
+			if w.Code != http.StatusInternalServerError {
+				t.Errorf("status = %d, want 500", w.Code)
+			}
+			if mem.count() != 0 {
+				t.Error("a failed upload left an entry")
+			}
+		})
 	}
 }
 
-func TestPublishFileDoesNotOverwrite(t *testing.T) {
-	dir := t.TempDir()
-	tmp := filepath.Join(dir, "x.cache.tmp-1")
-	final := filepath.Join(dir, "x.cache")
-	os.WriteFile(tmp, []byte("new"), 0o644)
-	os.WriteFile(final, []byte("old"), 0o644)
+func TestStoreFailuresAnswer500(t *testing.T) {
+	h, mem := newHandler(t)
+	mem.getErr = errors.New("disk on fire")
+	mem.putErr = errors.New("disk on fire")
 
-	if err := publishFile(tmp, final); !os.IsExist(err) {
-		t.Fatalf("expected an already-exists error, got %v", err)
-	}
-	if got, _ := os.ReadFile(final); string(got) != "old" {
-		t.Errorf("existing entry was overwritten: %q", got)
+	for _, method := range []string{"GET", "PUT"} {
+		if w := do(h, method, "x", "body", nil); w.Code != http.StatusInternalServerError {
+			t.Errorf("%s: status = %d, want 500", method, w.Code)
+		}
 	}
 }
 

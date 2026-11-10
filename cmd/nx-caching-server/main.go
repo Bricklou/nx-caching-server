@@ -16,6 +16,8 @@ import (
 	"nx-caching-server/internal/core"
 	"nx-caching-server/internal/server"
 	"nx-caching-server/internal/server/cache"
+	"nx-caching-server/internal/store"
+	"nx-caching-server/internal/store/fs"
 )
 
 func GetEnv(key, defaultValue string) string {
@@ -71,12 +73,15 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	go cache.RunCleanup(ctx, storageDir, cfg.Retention)
+	var entries store.Store = fs.New(storageDir)
+	if sweeper, ok := entries.(store.Sweeper); ok {
+		go cache.RunCleanup(ctx, sweeper, cfg.Retention)
+	}
 
 	srv := &http.Server{
 		Addr: ":" + GetEnv(portKey, "8090"),
 		Handler: server.New(server.Options{
-			Cache:    cache.New(storageDir),
+			Cache:    cache.New(entries),
 			Verifier: newVerifier(cfg),
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
