@@ -26,6 +26,8 @@ services:
 
 The file `auth.yaml` lists your forges and repositories, see [Authentication](../api/authentication.md).
 
+To keep the entries in a bucket instead of a volume, see [S3 storage](s3.md).
+
 Start it:
 
 ```bash

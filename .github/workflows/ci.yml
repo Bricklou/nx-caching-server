@@ -23,6 +23,55 @@ jobs:
       - name: Test
         run: go test -v ./...
 
+  s3:
+    name: s3 (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Garage ignores If-None-Match, SeaweedFS enforces it: both write paths run.
+          - service: garage
+            endpoint: http://127.0.0.1:3910
+            region: garage
+            access_key: GK000000000000000000000001
+            secret_key: "0000000000000000000000000000000000000000000000000000000000000002"
+          - service: seaweedfs
+            endpoint: http://127.0.0.1:8333
+            region: us-east-1
+            access_key: any
+            secret_key: any
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: 1.27.3
+
+      - name: Start Garage
+        if: matrix.service == 'garage'
+        run: |
+          docker compose -f docker-compose.dev.yml up -d
+          dev/garage-init.sh
+
+      - name: Start SeaweedFS
+        if: matrix.service == 'seaweedfs'
+        run: |
+          docker run -d --name seaweedfs -p 127.0.0.1:8333:8333 chrislusf/seaweedfs server -s3 -dir=/data
+          for _ in $(seq 30); do curl -s -o /dev/null http://127.0.0.1:8333 && exit 0; sleep 1; done
+          docker logs seaweedfs
+          exit 1
+
+      - name: Test the S3 backend
+        env:
+          NX_TEST_S3_ENDPOINT: ${{ matrix.endpoint }}
+          NX_TEST_S3_REGION: ${{ matrix.region }}
+          AWS_ACCESS_KEY_ID: ${{ matrix.access_key }}
+          AWS_SECRET_ACCESS_KEY: ${{ matrix.secret_key }}
+        run: go test -v -race ./internal/store/s3
+
   docs:
     runs-on: ubuntu-latest
     steps:
