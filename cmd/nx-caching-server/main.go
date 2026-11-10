@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"nx-caching-server/internal/core"
 	"nx-caching-server/internal/server"
 	"os"
 	"os/signal"
@@ -314,6 +315,7 @@ func cleanupOldRecords(cleanupThreshold time.Duration) {
 }
 
 func main() {
+	core.SetupLogger()
 
 	cleanupThreshold, err := time.ParseDuration(GetEnv(cleanupThresholdKey, "1h"))
 

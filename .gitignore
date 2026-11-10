@@ -5,3 +5,4 @@ site/
 # Build and dev output
 bin/
 tmp/
+.env

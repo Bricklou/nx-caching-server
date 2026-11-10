@@ -3,6 +3,9 @@ go = "latest"
 "pipx:zensical" = "latest"
 uv = "latest"
 
+[env]
+_.file = ".env"
+
 [tasks.dev]
 description = "Run the server locally (no auth, storage in ./tmp/storage); use `mise watch dev` to reload on change"
 env = { STORAGE_DIR = "tmp/storage", PORT = "8090", CLEANUP_THRESHOLD = "1h" }
