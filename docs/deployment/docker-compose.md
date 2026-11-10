@@ -1,3 +1,7 @@
+---
+icon: lucide/boxes
+---
+
 # Docker Compose
 
 Create a `docker-compose.yml` file:
@@ -12,12 +16,15 @@ services:
       - "8090:8090"
     volumes:
       - ./nx-cache-data:/data
+      - ./auth.yaml:/etc/nx-cache/auth.yaml:ro
     environment:
       - STORAGE_DIR=/data
       - PORT=8090
-      - AUTH_TOKEN=your-secure-token-here # remove this line for no authentication
+      - AUTH_CONFIG=/etc/nx-cache/auth.yaml # remove this line for no authentication
       - CLEANUP_THRESHOLD=24h
 ```
+
+The file `auth.yaml` lists your forges and repositories, see [Authentication](../api/authentication.md).
 
 Start it:
 
@@ -26,4 +33,4 @@ docker compose up -d
 ```
 
 !!! warning
-    Remove or replace the example `AUTH_TOKEN` before exposing the server beyond your local network.
+    Without `AUTH_CONFIG` every client can read and write the cache. Configure authentication before exposing the server beyond your local network.

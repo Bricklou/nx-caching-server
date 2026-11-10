@@ -6,13 +6,13 @@ icon: lucide/rocket
 
 A lightweight, self-hosted remote cache server for [Nx](https://nx.dev) workspaces, written in Go.
 
-It implements the Nx OpenAPI specification (v20.8+). Since Nx 20.8 you can point a workspace at your own cache server, and this one handles storage, retrieval and optional bearer-token authentication.
+It implements the Nx OpenAPI specification (v20.8+). Since Nx 20.8 you can point a workspace at your own cache server, and this one handles storage, retrieval and authentication with the OIDC tokens of your git forge.
 
 ## Key features
 
 - **Lightweight**: built with Go for performance and a small footprint.
 - **Self-hosted**: full control over your cache infrastructure.
-- **Secure**: optional bearer-token authentication, with per-repository tokens.
+- **Secure**: CI jobs authenticate with the OIDC token of GitHub, GitLab or Forgejo, and every repository and branch gets its own cache.
 - **Automatic cleanup**: configurable cache expiration.
 - **Docker ready**: pre-built images available.
 - **Nx compatible**: follows the Nx OpenAPI specification v20.8+.

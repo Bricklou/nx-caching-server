@@ -1,62 +1,22 @@
 # Nx Caching Server
 
-A custom remote caching server for [Nx](https://nx.dev), written in Go.  
-This implementation follows the Nx OpenAPI specification (v20.8+) and provides a lightweight, self-hosted remote cache solution.
+A custom remote caching server for [Nx](https://nx.dev), written in Go.
+It follows the Nx OpenAPI specification (v20.8+) and provides a lightweight, self-hosted remote cache.
 
-Since Nx 20.8, you can use your own caching server by implementing their OpenAPI spec.  
-This server handles storage, retrieval, and optional bearer-token authentication.
+Since Nx 20.8, you can use your own caching server by implementing their OpenAPI spec. This server handles storage, retrieval and authentication with the OIDC tokens of your git forge (GitHub, GitLab or Forgejo). Every repository and branch gets its own cache, so a pull request cannot write what your default branch reads.
 
-## Configuration
+Full documentation: <https://bricklou.github.io/nx-caching-server>
 
-Configure the server using environment variables:
+## Quick start
 
-| Variable             | Description                                          | Default              | Example values       |
-|----------------------|------------------------------------------------------|----------------------|----------------------|
-| `STORAGE_DIR`        | Directory for storing cache artifacts                | System temp dir      | `/data/nx-cache`     |
-| `CLEANUP_THRESHOLD`  | Duration after which unused cache entries are removed (hours only) | `1h`                 | `1h`, `24h`, `168h`  |
-| `PORT`               | Port the server listens on                           | `8090`               | `8080`               |
-| `AUTH_TOKEN`         | Bearer token required for all requests (optional)     | (unset = no auth)    | `my-secure-token`    |
-| `AUTH_TOKENS`        | Comma-separated `name:token` pairs, one per repository; each token only sees `STORAGE_DIR/<name>/` (optional) | (unset) | `repoA:tokA,repoB:tokB` |
-
-**Note:** `CLEANUP_THRESHOLD` uses hour-based durations (e.g. `24h` = 1 day, `168h` = 1 week).
-
-**Note:** `AUTH_TOKEN` and `AUTH_TOKENS` cannot be combined; the server exits at startup if both are set.
-
-## Getting Started
-
-### Running Locally (from source)
-
-1. Build the binary:
-
-   ```bash
-   go build -o nx-caching-server ./main.go
-   ```
-
-2. Run it:
-
-   ```bash
-   ./nx-caching-server
-   ```
-
-   With custom settings:
-
-   ```bash
-   STORAGE_DIR=./cache-data \
-   PORT=8090 \
-   AUTH_TOKEN=super-secret-123 \
-   CLEANUP_THRESHOLD=24h \
-   ./nx-caching-server
-   ```
-
-### Using Docker (published image)
-
-Pull the pre-built image from Docker Hub:
+### From source
 
 ```bash
-docker pull enxtur/nx-caching-server
+go build -o nx-caching-server ./cmd/nx-caching-server
+./nx-caching-server
 ```
 
-Run example (with persistent storage and authentication):
+### With Docker
 
 ```bash
 docker run -d \
@@ -64,49 +24,12 @@ docker run -d \
   -p 8090:8090 \
   -v $(pwd)/nx-cache-data:/data \
   -e STORAGE_DIR=/data \
-  -e AUTH_TOKEN=your-secure-token-here \
-  -e CLEANUP_THRESHOLD=48h \
   enxtur/nx-caching-server
 ```
 
-Or build your own image from source (if preferred):
+Or build your own image with `docker build -t nx-caching-server .`.
 
-```bash
-docker build -t nx-caching-server .
-```
-
-### Using Docker Compose
-
-Create a `docker-compose.yml` file:
-
-```yaml
-version: '3.8'
-
-services:
-  nx-cache:
-    image: enxtur/nx-caching-server:latest
-    container_name: nx-caching-server
-    restart: unless-stopped
-    ports:
-      - "8090:8090"
-    volumes:
-      - ./nx-cache-data:/data
-    environment:
-      - STORAGE_DIR=/data
-      - PORT=8090
-      - AUTH_TOKEN=your-secure-token-here          # remove this line if you want no authentication
-      - CLEANUP_THRESHOLD=24h
-```
-
-Start it:
-
-```bash
-docker compose up -d
-```
-
-### Multiple repositories
-
-Several repositories can share one server while keeping their caches separate. Give each repository its own name and token with `AUTH_TOKENS`:
+### With Docker Compose
 
 ```yaml
 services:
@@ -119,47 +42,60 @@ services:
       - ./nx-cache-data:/data
     environment:
       - STORAGE_DIR=/data
-      - AUTH_TOKENS=web-app:token-for-web-app,api:token-for-api
-      - CLEANUP_THRESHOLD=24h
 ```
 
-Each token can only read and write its own subdirectory:
+## Configuration
 
+The server is configured with environment variables. The main ones:
+
+| Variable                    | Description                                                                 | Default             |
+|-----------------------------|-----------------------------------------------------------------------------|---------------------|
+| `PORT`                      | Port the server listens on                                                  | `8090`              |
+| `STORAGE_DIR`               | Directory for storing cache artifacts                                       | System temp dir     |
+| `AUTH_CONFIG`               | YAML file listing the trusted forges and repositories. Unset means no auth  | unset               |
+| `CLEANUP_THRESHOLD`         | Duration after which unused entries are removed                             | `1h`                |
+| `CLEANUP_THRESHOLD_TRUSTED` | Same, for the default branch and trusted branches                           | `CLEANUP_THRESHOLD` |
+| `CLEANUP_THRESHOLD_PR`      | Same, for pull and merge requests                                           | `CLEANUP_THRESHOLD` |
+| `CLEANUP_THRESHOLD_DEV`     | Same, for the other branches                                                | `CLEANUP_THRESHOLD` |
+| `LOG_LEVEL`, `LOG_FORMAT`   | Log level (`debug`, `info`, `warn`, `error`) and format (`auto`, `pretty`, `text`, `json`) | `info`, `auto` |
+
+Durations use Go syntax: `24h` is one day, `168h` is one week. See the [configuration page](https://bricklou.github.io/nx-caching-server/configuration/) for every variable.
+
+## Authentication
+
+Without `AUTH_CONFIG`, every client can read and write the cache. To authenticate CI jobs, describe your forge and repositories in a file:
+
+```yaml
+forges:
+  - name: github
+    type: github
+    issuer: https://token.actions.githubusercontent.com
+    audience: nx-cache
+    repos:
+      - id: "123456"
+        name: my-org/app
+        default_branch: main
 ```
-nx-cache-data/
-├── web-app/
-│   └── <hash>.cache
-└── api/
-    └── <hash>.cache
-```
 
-- Names may contain only letters, digits, `_` and `-`. Tokens may contain `:`; only the first `:` separates the name from the token.
-- Names and tokens must be unique.
-- Each repository sets its own token in `NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN`; no other Nx changes are needed.
-- Switching from `AUTH_TOKEN` to `AUTH_TOKENS` moves cache files into per-name subdirectories, so Nx misses the cache once and rebuilds. The old flat files expire through normal cleanup.
-
-## Configuring Nx Workspace
-
-Point your Nx workspace to the caching server by setting these environment variables (or add them to `.env` / CI config):
+and start the server with `AUTH_CONFIG=/path/to/auth.yaml`. The CI job requests an OIDC token from its forge, for the audience `nx-cache`, and passes it to Nx:
 
 ```bash
-# No authentication
-export NX_SELF_HOSTED_REMOTE_CACHE_SERVER=http://localhost:8090
-
-# With authentication
-export NX_SELF_HOSTED_REMOTE_CACHE_SERVER=http://localhost:8090
-export NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN=your-secure-token-here
+export NX_SELF_HOSTED_REMOTE_CACHE_SERVER=https://cache.example.com
+export NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN=<OIDC token of the job>
 ```
 
-Then run your tasks as usual:
+The [authentication page](https://bricklou.github.io/nx-caching-server/api/authentication/) covers the file format, the branch rules and the CI setup of GitHub Actions, GitLab CI and Forgejo Actions.
+
+## Development
 
 ```bash
-npx nx run-many --target=build --all
+mise run dev                              # run the server, reload with `mise watch dev -r`
+mise run forge:serve                      # fake git forge to try authentication
+mise run forge:token -- github pr         # print a token for a situation
+go test ./...
 ```
-
-Nx will automatically read from / write to your self-hosted cache.
 
 ## Contributing
 
-Contributions, bug reports, and feature suggestions are welcome!  
+Contributions, bug reports, and feature suggestions are welcome!
 Feel free to open an issue or submit a pull request.

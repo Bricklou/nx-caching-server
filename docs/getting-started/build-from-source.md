@@ -1,3 +1,7 @@
+---
+icon: lucide/hammer
+---
+
 # Build from source
 
 Build and run the server from the source code. You need a recent [Go toolchain](https://go.dev/dl/).
@@ -26,9 +30,9 @@ go build -o nx-caching-server ./cmd/nx-caching-server
 ```bash
 STORAGE_DIR=./cache-data \
 PORT=8090 \
-AUTH_TOKEN=super-secret-123 \
 CLEANUP_THRESHOLD=24h \
+AUTH_CONFIG=./auth.yaml \
 ./nx-caching-server
 ```
 
-See [Configuration](../configuration.md) for every available variable.
+`AUTH_CONFIG` enables [authentication](../api/authentication.md); leave it out to run without. See [Configuration](../configuration.md) for every available variable.
