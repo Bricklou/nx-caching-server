@@ -9,6 +9,8 @@ type Config struct {
 	Storage Storage
 	// Server configures the HTTP listener.
 	Server Server
+	// Session configures the tokens exchanged for forge tokens.
+	Session Session
 }
 
 func Load() (Config, error) {
@@ -32,10 +34,16 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	session, err := loadSession()
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		AuthConfig: authConfig,
 		Retention:  retention,
 		Storage:    storage,
 		Server:     server,
+		Session:    session,
 	}, nil
 }

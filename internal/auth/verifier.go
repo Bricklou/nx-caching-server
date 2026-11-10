@@ -40,30 +40,63 @@ const (
 	discoveryCooldown = 5 * time.Second
 )
 
-// Verifier turns forge tokens into identities.
+// Verifier turns forge tokens and session tokens into identities.
 type Verifier struct {
 	byIssuer map[string]*forgeVerifier
+	byName   map[string]*forgeVerifier
+	sessions *sessions
+}
+
+// VerifierOption customizes a Verifier.
+type VerifierOption func(*verifierSettings)
+
+type verifierSettings struct {
+	sessionTTL    time.Duration
+	sessionSecret []byte
+}
+
+// WithSessions sets how long session tokens live and the key that signs them.
+// An empty secret means a random key, lost when the process stops.
+func WithSessions(ttl time.Duration, secret []byte) VerifierOption {
+	return func(s *verifierSettings) { s.sessionTTL, s.sessionSecret = ttl, secret }
+}
+
+// Session is a session token and the moment it stops being valid.
+type Session struct {
+	Token  string
+	Expiry time.Time
 }
 
 // NewVerifier builds a verifier for the forges of cfg. Nothing is fetched
 // until a token arrives, so a forge being down at startup is not fatal.
-func NewVerifier(cfg *config.AuthConfig) *Verifier {
-	return newVerifier(cfg, time.Now)
+func NewVerifier(cfg *config.AuthConfig, opts ...VerifierOption) *Verifier {
+	return newVerifier(cfg, time.Now, opts...)
 }
 
 // newVerifier takes the clock used to check token expiry and the discovery
 // cooldown, which tests control.
-func newVerifier(cfg *config.AuthConfig, now func() time.Time) *Verifier {
+func newVerifier(cfg *config.AuthConfig, now func() time.Time, opts ...VerifierOption) *Verifier {
 	client := &http.Client{Timeout: discoveryTimeout}
 
-	v := &Verifier{byIssuer: make(map[string]*forgeVerifier, len(cfg.Forges))}
+	settings := verifierSettings{sessionTTL: config.DefaultSessionTTL}
+	for _, opt := range opts {
+		opt(&settings)
+	}
+
+	v := &Verifier{
+		byIssuer: make(map[string]*forgeVerifier, len(cfg.Forges)),
+		byName:   make(map[string]*forgeVerifier, len(cfg.Forges)),
+		sessions: newSessions(settings.sessionSecret, settings.sessionTTL, now),
+	}
 	for _, forge := range cfg.Forges {
 		adapt, ok := adapters.For(forge.Type)
 		if !ok {
 			slog.Warn("forge type has no claim adapter, its tokens will be rejected",
 				slog.String("forge", forge.Name), slog.String("type", forge.Type))
 		}
-		v.byIssuer[forge.Issuer] = &forgeVerifier{forge: forge, adapt: adapt, client: client, now: now}
+		fv := &forgeVerifier{forge: forge, adapt: adapt, client: client, now: now}
+		v.byIssuer[forge.Issuer] = fv
+		v.byName[forge.Name] = fv
 	}
 	return v
 }
@@ -73,8 +106,12 @@ func IsToken(raw string) bool {
 	return strings.Count(raw, ".") == 2 && !strings.ContainsAny(raw, " \t\r\n")
 }
 
-// Verify checks raw and returns the identity it grants.
+// Verify checks raw, a forge token or a session token, and returns the identity it grants.
 func (v *Verifier) Verify(ctx context.Context, raw string) (*Identity, error) {
+	if strings.HasPrefix(raw, sessionPrefix) {
+		return v.verifySession(raw)
+	}
+
 	fv, err := v.forgeFor(raw)
 	if err != nil {
 		return nil, err
@@ -82,6 +119,40 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (*Identity, error) {
 	claims, err := fv.verifiedClaims(ctx, raw)
 	if err != nil {
 		return nil, err
+	}
+	return fv.identityFor(claims)
+}
+
+// Exchange verifies a forge token and returns a session token for the same
+// claims. A session token is refused: it cannot be exchanged to live longer.
+func (v *Verifier) Exchange(ctx context.Context, raw string) (Session, error) {
+	fv, err := v.forgeFor(raw)
+	if err != nil {
+		return Session{}, err
+	}
+	claims, err := fv.verifiedClaims(ctx, raw)
+	if err != nil {
+		return Session{}, err
+	}
+	// Refuse here the jobs that would be refused on every request.
+	if _, err := fv.identityFor(claims); err != nil {
+		return Session{}, err
+	}
+
+	token, expiry := v.sessions.issue(fv.forge.Name, claims)
+	return Session{Token: token, Expiry: expiry}, nil
+}
+
+// verifySession checks a session token and resolves its claims again, so a
+// change of configuration applies to tokens already issued.
+func (v *Verifier) verifySession(raw string) (*Identity, error) {
+	forge, claims, err := v.sessions.parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	fv, ok := v.byName[forge]
+	if !ok {
+		return nil, fmt.Errorf("%w: forge %q is no longer configured", ErrInvalidSession, forge)
 	}
 	return fv.identityFor(claims)
 }

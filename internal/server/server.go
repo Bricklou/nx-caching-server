@@ -33,5 +33,10 @@ func New(opts Options) http.Handler {
 	}
 	root.Handle("/v1/cache/", cacheRoutes)
 
+	// The exchange needs authentication to exist: it trades a forge token.
+	if opts.Verifier != nil {
+		root.Handle("POST /v1/auth/session", auth.SessionHandler(opts.Verifier))
+	}
+
 	return chain(root, recovery, requestLog)
 }

@@ -94,6 +94,8 @@ Unused cache entries are removed after a retention that depends on the kind of s
 |------------------------------|------------------------------------------------------------------------------------------------------------------------------|---------------------|-------------------------|
 | `AUTH_CONFIG`                | Path of the YAML file that lists the trusted git forges and their repositories. When unset, authentication is disabled       | unset (no auth)     | `/etc/nx-cache/auth.yaml` |
 | `AUTH_ALLOW_INSECURE_ISSUER` | Accept `http` issuer and JWKS URLs. For development only: the server logs a warning at startup while it is set              | unset               | `true`                  |
+| `SESSION_TTL`                | How long a [session token](api/authentication.md#long-runs-and-session-tokens) lives, in Go duration syntax                  | `2h`                | `6h`                    |
+| `SESSION_SECRET`             | Key that signs session tokens, at least 32 characters. Unset: a random key, lost on restart and not shared between instances | random              | `openssl rand -hex 32`  |
 
 - **No authentication**: leave `AUTH_CONFIG` unset. Every client can read and write the cache, and the server logs a warning at startup.
 - **Forge authentication**: set `AUTH_CONFIG`. CI jobs authenticate with the OIDC token of their forge (GitHub, GitLab or Forgejo), and each repository and branch gets its own cache scope.

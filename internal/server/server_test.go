@@ -3,6 +3,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -313,5 +314,101 @@ func TestADeniedBranchIsForbidden(t *testing.T) {
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", w.Code)
+	}
+}
+
+// exchange trades a forge token for a session token through the public endpoint.
+func (h *harness) exchange(forgeToken string) (string, *httptest.ResponseRecorder) {
+	h.t.Helper()
+	w := h.do("POST", "/v1/auth/session", forgeToken, "")
+	if w.Code != http.StatusOK {
+		return "", w
+	}
+
+	var body struct {
+		Token     string `json:"token"`
+		ExpiresIn int    `json:"expires_in"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body.Token == "" || body.ExpiresIn <= 0 {
+		h.t.Fatalf("exchange answered %q (%v)", w.Body.String(), err)
+	}
+	return body.Token, w
+}
+
+func TestSessionTokenWorksLikeTheForgeToken(t *testing.T) {
+	for _, forgeType := range allForgeTypes() {
+		t.Run(forgeType, func(t *testing.T) {
+			h := newHarness(t, forgeType)
+			session, w := h.exchange(h.token(pullRequest1))
+			if session == "" {
+				t.Fatalf("exchange: %d %q", w.Code, w.Body.String())
+			}
+			if got := w.Header().Get("Cache-Control"); got != "no-store" {
+				t.Errorf("Cache-Control = %q, want no-store", got)
+			}
+
+			// The pull request writes its own scope and reads the default one.
+			if w := h.do("PUT", "/v1/cache/abc", session, "body"); w.Code != http.StatusOK {
+				t.Fatalf("upload with the session: %d", w.Code)
+			}
+			if w := h.do("GET", "/v1/cache/abc", h.token(pullRequest1), ""); w.Code != http.StatusOK {
+				t.Errorf("the forge token of the same pull request does not see the entry: %d", w.Code)
+			}
+			if w := h.do("GET", "/v1/cache/abc", h.token(pullRequest2), ""); w.Code != http.StatusNotFound {
+				t.Errorf("another pull request sees the entry: %d, want 404", w.Code)
+			}
+		})
+	}
+}
+
+func TestSessionKeepsTheScopeOfTheForgeToken(t *testing.T) {
+	h := newHarness(t, config.ForgeTypeGitHub)
+	if w := h.do("PUT", "/v1/cache/main-entry", h.token(pushMain), "from main"); w.Code != http.StatusOK {
+		t.Fatalf("seed: %d", w.Code)
+	}
+
+	untrustedSession, _ := h.exchange(h.token(untrusted))
+
+	if w := h.do("GET", "/v1/cache/main-entry", untrustedSession, ""); w.Code != http.StatusOK {
+		t.Errorf("an untrusted session cannot read the default scope: %d", w.Code)
+	}
+	if w := h.do("PUT", "/v1/cache/poison", untrustedSession, "bad"); w.Code != http.StatusForbidden {
+		t.Errorf("an untrusted session wrote: %d, want 403", w.Code)
+	}
+}
+
+func TestExchangeAnswers(t *testing.T) {
+	h := newHarness(t, config.ForgeTypeGitHub)
+	session, _ := h.exchange(h.token(pushMain))
+
+	tests := []struct {
+		name   string
+		method string
+		token  string
+		want   int
+	}{
+		{"no token", "POST", "", http.StatusUnauthorized},
+		{"bad token", "POST", "not-a-token", http.StatusUnauthorized},
+		{"repository not allowed", "POST", h.tokenForRepo("999"), http.StatusForbidden},
+		{"a session token", "POST", session, http.StatusUnauthorized},
+		{"GET is not allowed", "GET", h.token(pushMain), http.StatusMethodNotAllowed},
+		{"PUT is not allowed", "PUT", h.token(pushMain), http.StatusMethodNotAllowed},
+	}
+	for _, tt := range tests {
+		if w := h.do(tt.method, "/v1/auth/session", tt.token, ""); w.Code != tt.want {
+			t.Errorf("%s: status = %d, want %d", tt.name, w.Code, tt.want)
+		}
+	}
+}
+
+func TestExchangeDoesNotExistWithoutAuthentication(t *testing.T) {
+	handler := New(Options{Cache: cache.New(fs.New(t.TempDir()))})
+	req := httptest.NewRequest("POST", "/v1/auth/session", nil)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", w.Code)
 	}
 }

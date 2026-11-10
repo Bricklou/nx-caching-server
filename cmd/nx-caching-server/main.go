@@ -43,7 +43,10 @@ func newVerifier(cfg config.Config) *auth.Verifier {
 		slog.Warn("authentication is disabled: every client can read and write the cache")
 		return nil
 	}
-	return auth.NewVerifier(cfg.AuthConfig)
+	if len(cfg.Session.Secret) == 0 {
+		slog.Info("session tokens are signed with a random key: they stop working when the server restarts, and instances do not share them; set SESSION_SECRET to change that")
+	}
+	return auth.NewVerifier(cfg.AuthConfig, auth.WithSessions(cfg.Session.TTL, cfg.Session.Secret))
 }
 
 // newStore opens the backend that STORAGE_BACKEND selects.

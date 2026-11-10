@@ -119,8 +119,10 @@ Set `NX_SELF_HOSTED_REMOTE_CACHE_SERVER` to the URL of the server and `NX_SELF_H
           - uses: actions/checkout@v4
           - name: Get a cache token
             run: |
-              token=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              jwt=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
                 "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=nx-cache" | jq -r .value)
+              token=$(curl -sX POST -H "Authorization: Bearer $jwt" \
+                "$NX_SELF_HOSTED_REMOTE_CACHE_SERVER/v1/auth/session" | jq -r .token)
               echo "::add-mask::$token"
               echo "NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"
           - run: npx nx run-many --target=build --all
@@ -154,16 +156,35 @@ Set `NX_SELF_HOSTED_REMOTE_CACHE_SERVER` to the URL of the server and `NX_SELF_H
           - uses: actions/checkout@v4
           - name: Get a cache token
             run: |
-              token=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              jwt=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
                 "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=nx-cache" | jq -r .value)
+              token=$(curl -sX POST -H "Authorization: Bearer $jwt" \
+                "$NX_SELF_HOSTED_REMOTE_CACHE_SERVER/v1/auth/session" | jq -r .token)
               echo "NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"
           - run: npx nx run-many --target=build --all
     ```
 
     Your Forgejo version must support Actions ID tokens.
 
-!!! warning "Tokens are short-lived"
-    Request the token in the job that runs Nx. A token that expires during a very long run is refused, and Nx then rebuilds the rest without the cache.
+## Long runs and session tokens
+
+A forge token is short-lived: about five minutes on GitHub (observed, not documented), and not documented on Forgejo. GitLab sets it to the timeout of the job, or five minutes when the job has none. Nx reads the token once, when it starts, and cannot renew it. After the expiry the server refuses it, and **Nx stops the whole run** with `Misconfigured remote cache endpoint: Unexpected response status: 403 Forbidden`.
+
+To avoid that, the job exchanges its forge token once, before Nx starts, for a session token that lives longer. The GitHub and Forgejo snippets above do it. The exchange is one request:
+
+```bash
+curl -sX POST -H "Authorization: Bearer $jwt" https://cache.example.com/v1/auth/session
+# {"expires_in":7200,"token":"nxs_..."}
+```
+
+The session token goes in `NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN` like any other.
+
+- **Same rights.** The session carries the claims the server verified (repository, branch or pull request, actor), not the rights. Rights are worked out again on each request from the configuration, so a repository removed from the allowlist loses access at once.
+- **Bounded life.** It expires after `SESSION_TTL` (two hours by default), and it cannot be exchanged again, so it cannot renew itself. Raise `SESSION_TTL` for jobs that run longer.
+- **A forge token is needed to get one.** The exchange only accepts a valid, unexpired forge token from an allowed repository, so a token that leaked a few minutes ago cannot be turned into a session. The same rules apply as for the cache: a job that would be refused is refused here.
+- **Signing key.** Sessions are signed with `SESSION_SECRET`. Without it, the server draws a random key at startup: sessions stop working when it restarts, and several instances behind one address do not accept each other's sessions. Set the same `SESSION_SECRET` on every instance in that case.
+
+Keep the session token as secret as the forge token: whoever holds it can use the cache with the same rights until it expires. Never print it in a log.
 
 ## Responses
 
