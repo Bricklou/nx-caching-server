@@ -1,5 +1,5 @@
-// ABOUTME: Tests log level parsing and LOG_FORMAT handler selection.
-// ABOUTME: Handlers write to an in-memory buffer so output can be asserted.
+// Tests log level parsing and LOG_FORMAT handler selection.
+// Handlers write to an in-memory buffer so output can be asserted.
 package core
 
 import (

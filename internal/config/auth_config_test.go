@@ -1,5 +1,5 @@
-// ABOUTME: Tests loading of the AUTH_CONFIG YAML file.
-// ABOUTME: Covers fail-closed cases: empty, null, multi-document and unknown-key files.
+// Tests loading of the AUTH_CONFIG YAML file.
+// Covers fail-closed cases: empty, null, multi-document and unknown-key files.
 package config
 
 import (
@@ -45,7 +45,7 @@ func TestDecodeAuthConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := decodeAuthConfig(strings.NewReader(tt.input))
+			got, err := decodeAuthConfig(strings.NewReader(tt.input), ValidateOptions{})
 
 			if tt.wantErr == nil && tt.errText == "" {
 				if err != nil {
@@ -74,7 +74,7 @@ func TestDecodeAuthConfig(t *testing.T) {
 }
 
 func TestDecodeAuthConfigFields(t *testing.T) {
-	got, err := decodeAuthConfig(strings.NewReader(validConfig))
+	got, err := decodeAuthConfig(strings.NewReader(validConfig), ValidateOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestDecodeAuthConfigFields(t *testing.T) {
 func TestDecodeAuthConfigNumericIDStaysString(t *testing.T) {
 	input := strings.Replace(validConfig, `"123456"`, "123456", 1)
 
-	got, err := decodeAuthConfig(strings.NewReader(input))
+	got, err := decodeAuthConfig(strings.NewReader(input), ValidateOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -181,14 +181,14 @@ func validAuthConfig() *AuthConfig {
 }
 
 func TestAuthConfigValidate(t *testing.T) {
-	if err := validAuthConfig().Validate(); err != nil {
+	if err := validAuthConfig().Validate(ValidateOptions{}); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
 
 	second := validForge()
 	second.Name = "forgejo"
 	second.Issuer = "https://forge.example.com/api/actions"
-	if err := (&AuthConfig{Forges: []Forge{validForge(), second}}).Validate(); err != nil {
+	if err := (&AuthConfig{Forges: []Forge{validForge(), second}}).Validate(ValidateOptions{}); err != nil {
 		t.Errorf("two distinct forges rejected: %v", err)
 	}
 
@@ -217,7 +217,7 @@ func TestAuthConfigValidate(t *testing.T) {
 			cfg := validAuthConfig()
 			tt.mutate(cfg)
 
-			err := cfg.Validate()
+			err := cfg.Validate(ValidateOptions{})
 
 			if err == nil {
 				t.Fatal("expected a validation error")
@@ -230,7 +230,7 @@ func TestAuthConfigValidate(t *testing.T) {
 }
 
 func TestAuthConfigValidateNoForges(t *testing.T) {
-	if err := (&AuthConfig{}).Validate(); !errors.Is(err, errNoForges) {
+	if err := (&AuthConfig{}).Validate(ValidateOptions{}); !errors.Is(err, errNoForges) {
 		t.Errorf("error = %v, want %v", err, errNoForges)
 	}
 }
@@ -238,7 +238,7 @@ func TestAuthConfigValidateNoForges(t *testing.T) {
 func TestDecodeAuthConfigRunsValidation(t *testing.T) {
 	input := strings.Replace(validConfig, "audience: nx-cache", "audience: \"\"", 1)
 
-	got, err := decodeAuthConfig(strings.NewReader(input))
+	got, err := decodeAuthConfig(strings.NewReader(input), ValidateOptions{})
 
 	if err == nil || got != nil {
 		t.Fatalf("got (%+v, %v), want a validation error", got, err)
@@ -250,7 +250,7 @@ func TestDecodeAuthConfigRunsValidation(t *testing.T) {
 
 func TestLoadAuthConfigReportsEachProblem(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "auth.yaml")
-	content := "forges:\n  - name: gitlab\n    type: gitlab\n"
+	content := "forges:\n  - name: bb\n    type: bitbucket\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +275,7 @@ func TestLoadAuthConfigReportsEachProblem(t *testing.T) {
 			t.Errorf("problem %q spans several lines", problem)
 		}
 	}
-	if !strings.Contains(fileErr.Problems[0].Error(), `type "gitlab" is not supported`) {
+	if !strings.Contains(fileErr.Problems[0].Error(), `type "bitbucket" is not supported`) {
 		t.Errorf("unexpected first problem: %v", fileErr.Problems[0])
 	}
 }
@@ -308,5 +308,103 @@ func TestFlatten(t *testing.T) {
 	}
 	if got := flatten(a); len(got) != 1 || got[0] != a {
 		t.Errorf("flatten of a plain error = %v", got)
+	}
+}
+
+func TestLoadValidateOptions(t *testing.T) {
+	tests := []struct {
+		value   string
+		want    bool
+		wantErr bool
+	}{
+		{"", false, false},
+		{"true", true, false},
+		{"1", true, false},
+		{"false", false, false},
+		{"0", false, false},
+		{"ture", false, true},
+		{"yes", false, true},
+	}
+
+	for _, tt := range tests {
+		t.Run("value="+tt.value, func(t *testing.T) {
+			t.Setenv(allowInsecureIssuerKey, tt.value)
+
+			got, err := loadValidateOptions()
+
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got.AllowInsecureIssuer != tt.want {
+				t.Errorf("AllowInsecureIssuer = %v, want %v", got.AllowInsecureIssuer, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadAuthConfigInsecureIssuer(t *testing.T) {
+	content := strings.Replace(validConfig, "https://token.actions.githubusercontent.com", "http://127.0.0.1:9100", 1)
+	path := filepath.Join(t.TempDir(), "auth.yaml")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(authConfigKey, path)
+
+	t.Setenv(allowInsecureIssuerKey, "")
+	if _, err := loadAuthConfig(); err == nil {
+		t.Error("http issuer must be rejected without the flag")
+	}
+
+	t.Setenv(allowInsecureIssuerKey, "true")
+	if _, err := loadAuthConfig(); err != nil {
+		t.Errorf("http issuer must be accepted with the flag: %v", err)
+	}
+
+	t.Setenv(allowInsecureIssuerKey, "maybe")
+	if _, err := loadAuthConfig(); err == nil {
+		t.Error("an invalid flag value must fail startup")
+	}
+}
+
+func TestParseAuthConfigDoesNotValidate(t *testing.T) {
+	// A development config with an http issuer and a missing audience parses.
+	input := "forges:\n  - name: dev\n    type: github\n    issuer: http://127.0.0.1:9100/oidc\n"
+
+	got, err := ParseAuthConfig(strings.NewReader(input))
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got.Forges) != 1 || got.Forges[0].Issuer != "http://127.0.0.1:9100/oidc" {
+		t.Errorf("forges = %+v", got.Forges)
+	}
+}
+
+func TestParseAuthConfigIsStrict(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr error
+		text    string
+	}{
+		{"empty", "", errEmptyAuthConfig, ""},
+		{"two documents", "forges: []\n---\nforges: []\n", errMultipleDocuments, ""},
+		{"unknown key", "forges:\n  - name: a\n    audiance: x\n", nil, "audiance"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseAuthConfig(strings.NewReader(tt.input))
+
+			if err == nil || got != nil {
+				t.Fatalf("got (%+v, %v), want an error", got, err)
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("error = %v, want %v", err, tt.wantErr)
+			}
+			if tt.text != "" && !strings.Contains(err.Error(), tt.text) {
+				t.Errorf("error %q does not mention %q", err, tt.text)
+			}
+		})
 	}
 }

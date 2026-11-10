@@ -1,5 +1,5 @@
-// ABOUTME: Loads the authentication settings from the YAML file named by AUTH_CONFIG.
-// ABOUTME: Returns no config when AUTH_CONFIG is unset, meaning authentication is off.
+// Loads the authentication settings from the YAML file named by AUTH_CONFIG.
+// Returns no config when AUTH_CONFIG is unset, meaning authentication is off.
 package config
 
 import (
@@ -9,12 +9,16 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-const authConfigKey = "AUTH_CONFIG"
+const (
+	authConfigKey          = "AUTH_CONFIG"
+	allowInsecureIssuerKey = "AUTH_ALLOW_INSECURE_ISSUER"
+)
 
 var (
 	errEmptyAuthConfig   = errors.New("file is empty")
@@ -53,6 +57,12 @@ func flatten(err error) []error {
 	return leaves
 }
 
+// ValidateOptions relaxes validation rules for development.
+type ValidateOptions struct {
+	// AllowInsecureIssuer accepts http issuer and JWKS URLs.
+	AllowInsecureIssuer bool
+}
+
 // AuthConfig lists the git forges whose OIDC tokens are accepted.
 type AuthConfig struct {
 	Forges []Forge `yaml:"forges"`
@@ -79,6 +89,11 @@ func loadAuthConfig() (*AuthConfig, error) {
 		return nil, nil
 	}
 
+	opts, err := loadValidateOptions()
+	if err != nil {
+		return nil, err
+	}
+
 	file, err := os.Open(configPath)
 	if err != nil {
 		// The path is already carried by FileError.
@@ -91,16 +106,49 @@ func loadAuthConfig() (*AuthConfig, error) {
 
 	slog.Debug("loading auth config", slog.String("path", configPath))
 
-	config, err := decodeAuthConfig(file)
+	config, err := decodeAuthConfig(file, opts)
 	if err != nil {
 		return nil, &FileError{Path: configPath, Problems: flatten(err)}
+	}
+	if opts.AllowInsecureIssuer {
+		warnInsecure(config)
 	}
 	return config, nil
 }
 
-// decodeAuthConfig decodes exactly one YAML document and rejects unknown keys.
-// An empty document is an error so a blank file can never disable auth.
-func decodeAuthConfig(r io.Reader) (*AuthConfig, error) {
+// loadValidateOptions parses AUTH_ALLOW_INSECURE_ISSUER. An invalid value is an
+// error so a typo cannot silently turn the strict rule on or off.
+func loadValidateOptions() (ValidateOptions, error) {
+	raw := os.Getenv(allowInsecureIssuerKey)
+	if raw == "" {
+		return ValidateOptions{}, nil
+	}
+
+	allow, err := strconv.ParseBool(raw)
+	if err != nil {
+		return ValidateOptions{}, fmt.Errorf("%s: %q is not a boolean", allowInsecureIssuerKey, raw)
+	}
+	return ValidateOptions{AllowInsecureIssuer: allow}, nil
+}
+
+// warnInsecure logs the forges that actually use http, so a flag left on in
+// production stands out.
+func warnInsecure(config *AuthConfig) {
+	var insecure []string
+	for _, forge := range config.Forges {
+		if strings.HasPrefix(forge.Issuer, "http://") || strings.HasPrefix(forge.JWKSURL, "http://") {
+			insecure = append(insecure, forge.Name)
+		}
+	}
+	slog.Warn(allowInsecureIssuerKey+" is set: http issuers are accepted, for development only",
+		slog.Any("insecure_forges", insecure))
+}
+
+// ParseAuthConfig decodes exactly one YAML document and rejects unknown keys,
+// without validating the content. An empty document is an error so a blank
+// file can never disable auth. Tools that read a development config use it
+// directly; the server goes through decodeAuthConfig.
+func ParseAuthConfig(r io.Reader) (*AuthConfig, error) {
 	decoder := yaml.NewDecoder(r)
 	decoder.KnownFields(true)
 
@@ -120,15 +168,24 @@ func decodeAuthConfig(r io.Reader) (*AuthConfig, error) {
 		return nil, err
 	}
 
-	if err := config.Validate(); err != nil {
+	return &config, nil
+}
+
+// decodeAuthConfig parses the document, then validates it.
+func decodeAuthConfig(r io.Reader, opts ValidateOptions) (*AuthConfig, error) {
+	config, err := ParseAuthConfig(r)
+	if err != nil {
 		return nil, err
 	}
-	return &config, nil
+	if err := config.Validate(opts); err != nil {
+		return nil, err
+	}
+	return config, nil
 }
 
 // Validate reports every problem found in the config at once, so one startup
 // attempt is enough to fix a file.
-func (c *AuthConfig) Validate() error {
+func (c *AuthConfig) Validate(opts ValidateOptions) error {
 	if len(c.Forges) == 0 {
 		return errNoForges
 	}
@@ -137,7 +194,7 @@ func (c *AuthConfig) Validate() error {
 	names := make(map[string]bool, len(c.Forges))
 	issuers := make(map[string]string, len(c.Forges))
 	for i, forge := range c.Forges {
-		for _, err := range forge.validate() {
+		for _, err := range forge.validate(opts) {
 			errs = append(errs, fmt.Errorf("forges[%d] (%q): %w", i, forge.Name, err))
 		}
 		if forge.Name != "" && names[forge.Name] {
