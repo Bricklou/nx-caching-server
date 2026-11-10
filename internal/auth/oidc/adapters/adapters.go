@@ -15,6 +15,9 @@ type Claims struct {
 	Ref      string
 	Event    string
 	Scope    scope.Event
+	// PipelineID is set for GitLab merge request pipelines, whose token has no
+	// merge request number. The server can ask GitLab which merge request it is.
+	PipelineID string
 }
 
 // Adapter turns the raw payload of a verified token into Claims.

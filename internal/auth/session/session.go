@@ -92,11 +92,14 @@ func (m *Manager) Authenticate(_ context.Context, raw string) (*auth.Identity, e
 
 // Exchange verifies a forge token and returns a session token for the same
 // claims. A session token is refused: it cannot be exchanged to live longer.
-func (m *Manager) Exchange(ctx context.Context, raw string) (Session, error) {
+// jobToken, the CI_JOB_TOKEN of a GitLab job, is optional: it lets the server
+// ask GitLab which merge request the job runs for, and is used once, never kept.
+func (m *Manager) Exchange(ctx context.Context, raw, jobToken string) (Session, error) {
 	verified, err := m.verifier.Verify(ctx, raw)
 	if err != nil {
 		return Session{}, err
 	}
+	verified = m.verifier.WithMergeRequest(ctx, verified, jobToken)
 	// Refuse here the jobs that would be refused on every request.
 	if _, err := m.verifier.Identity(verified.Forge, verified.Claims); err != nil {
 		return Session{}, err

@@ -12,12 +12,15 @@ const ForgeTypeGitlab = "gitlab"
 const ForgeTypeForgejo = "forgejo"
 
 type Forge struct {
-	Name     string       `yaml:"name"`
-	Type     string       `yaml:"type"`
-	Issuer   string       `yaml:"issuer"`
-	Audience string       `yaml:"audience"`
-	JWKSURL  string       `yaml:"jwks_url,omitempty"`
-	Repos    []Repository `yaml:"repos"`
+	Name     string `yaml:"name"`
+	Type     string `yaml:"type"`
+	Issuer   string `yaml:"issuer"`
+	Audience string `yaml:"audience"`
+	JWKSURL  string `yaml:"jwks_url,omitempty"`
+	// APIURL is the base URL the server calls to find the merge request of a
+	// GitLab pipeline, the issuer when empty. Only GitLab forges use it.
+	APIURL string       `yaml:"api_url,omitempty"`
+	Repos  []Repository `yaml:"repos"`
 }
 
 type Repository struct {

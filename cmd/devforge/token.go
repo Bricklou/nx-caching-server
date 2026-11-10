@@ -42,6 +42,7 @@ type options struct {
 	base      string
 	tag       string
 	number    int
+	pipeline  string
 	actor     string
 	protected bool
 	ttl       time.Duration
@@ -60,6 +61,7 @@ func token(args []string, stdout, stderr io.Writer) error {
 	flags.StringVar(&opts.base, "base", "", "pull request target branch, default: the repository default branch")
 	flags.StringVar(&opts.tag, "tag", "v1.0.0", "tag name for the tag scenario")
 	flags.IntVar(&opts.number, "number", 1, "pull request number")
+	flags.StringVar(&opts.pipeline, "pipeline-id", "", "pipeline id (gitlab), default 1")
 	flags.StringVar(&opts.actor, "actor", "dev", "user that triggered the job")
 	flags.BoolVar(&opts.protected, "protected", false, "mark the ref as protected (gitlab and forgejo)")
 	flags.DurationVar(&opts.ttl, "ttl", devforge.DefaultTTL, "token lifetime")
@@ -210,6 +212,6 @@ func mint(signer *devforge.Signer, forgeType, scenario string, dest target, opts
 		devforge.Scenario{Kind: kind, Branch: branch, Base: base, Tag: opts.tag, Number: opts.number},
 		devforge.Job{
 			Audience: dest.audience, RepoID: dest.repoID, RepoPath: dest.repoPath,
-			Actor: opts.actor, Protected: opts.protected, TTL: opts.ttl,
+			Actor: opts.actor, Protected: opts.protected, TTL: opts.ttl, PipelineID: opts.pipeline,
 		})
 }

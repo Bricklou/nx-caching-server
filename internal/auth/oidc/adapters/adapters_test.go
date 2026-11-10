@@ -141,6 +141,23 @@ func TestGitlabAdapter(t *testing.T) {
 				Scope: scope.Event{Kind: scope.KindPullRequest, PRSourceBranch: "feature/x", Actor: "u"}},
 		},
 		{
+			name:    "merge request keeps its pipeline id, numeric or not",
+			payload: `{"project_id":"20","ref":"feature/x","ref_type":"branch","pipeline_source":"merge_request_event","pipeline_id":4711,"user_login":"u"}`,
+			want: Claims{RepoID: "20", Actor: "u", Ref: "feature/x", Event: "merge_request_event", PipelineID: "4711",
+				Scope: scope.Event{Kind: scope.KindPullRequest, PRSourceBranch: "feature/x", Actor: "u"}},
+		},
+		{
+			name:    "a fork merge request is identified by the fork, not the project running the job",
+			payload: `{"project_id":"99","job_project_id":"20","ref":"feature/x","ref_type":"branch","pipeline_source":"merge_request_event","pipeline_id":"7","user_login":"u"}`,
+			want: Claims{RepoID: "99", Actor: "u", Ref: "feature/x", Event: "merge_request_event", PipelineID: "7",
+				Scope: scope.Event{Kind: scope.KindPullRequest, PRSourceBranch: "feature/x", Actor: "u"}},
+		},
+		{
+			name:    "a push has no pipeline id to look up",
+			payload: `{"project_id":"20","ref":"main","ref_type":"branch","pipeline_source":"push","pipeline_id":"8"}`,
+			want:    Claims{RepoID: "20", Ref: "main", Event: "push", Scope: scope.Event{Kind: scope.KindPush, Branch: "main"}},
+		},
+		{
 			name:    "tag",
 			payload: `{"project_id":"20","ref":"v1.0.0","ref_type":"tag","pipeline_source":"push"}`,
 			want:    Claims{RepoID: "20", Ref: "v1.0.0", Event: "push", Scope: scope.Event{Kind: scope.KindUntrusted}},

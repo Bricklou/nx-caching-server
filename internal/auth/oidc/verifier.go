@@ -19,6 +19,7 @@ import (
 
 	"nx-caching-server/internal/auth"
 	"nx-caching-server/internal/auth/oidc/adapters"
+	"nx-caching-server/internal/auth/oidc/gitlabapi"
 	"nx-caching-server/internal/config"
 	"nx-caching-server/internal/scope"
 )
@@ -89,6 +90,9 @@ func NewVerifier(cfg *config.AuthConfig, opts ...Option) *Verifier {
 				slog.String("forge", forge.Name), slog.String("type", forge.Type))
 		}
 		fv := &forgeVerifier{forge: forge, adapt: adapt, client: client, now: now}
+		if forge.Type == config.ForgeTypeGitlab {
+			fv.mergeRequests = gitlabapi.New(orDefault(forge.APIURL, forge.Issuer), now)
+		}
 		v.byIssuer[forge.Issuer] = fv
 		v.byName[forge.Name] = fv
 	}
@@ -178,6 +182,9 @@ type forgeVerifier struct {
 	client *http.Client
 	now    func() time.Time
 
+	// mergeRequests finds the merge request of a GitLab pipeline. Nil for other forges.
+	mergeRequests *gitlabapi.Client
+
 	// verifier is built on first use and then read without a lock.
 	verifier atomic.Pointer[goidc.IDTokenVerifier]
 
@@ -203,6 +210,45 @@ func (f *forgeVerifier) verifiedClaims(ctx context.Context, raw string) (adapter
 		return adapters.Claims{}, fmt.Errorf("%w: %v", ErrMalformedToken, err)
 	}
 	return f.adapt(payload)
+}
+
+// WithMergeRequest replaces the source branch key of a GitLab merge request by
+// its number and target branch, as GitLab reports them. jobToken is the
+// CI_JOB_TOKEN of the job, which only authorizes the calls to GitLab and is not
+// kept. Only repositories on the allowlist are looked up, so a token of any
+// other project costs no request. Without a job token, and for anything else
+// than a merge request, the claims are returned as they are. When GitLab cannot say, the job loses write access rather
+// than keep a scope shared with other merge requests of the branch.
+func (v *Verifier) WithMergeRequest(ctx context.Context, verified Verified, jobToken string) Verified {
+	fv, ok := v.byName[verified.Forge]
+	claims := verified.Claims
+	if !ok || fv.mergeRequests == nil || claims.PipelineID == "" || jobToken == "" {
+		return verified
+	}
+	if _, ok := fv.repository(claims.RepoID); !ok {
+		return verified
+	}
+
+	mr, err := fv.mergeRequests.Lookup(ctx, jobToken, claims.RepoID, claims.PipelineID, claims.Ref)
+	if err != nil {
+		slog.Warn("could not find the merge request of a pipeline, the job gets read access only",
+			slog.String("forge", fv.forge.Name),
+			slog.String("project", claims.RepoID),
+			slog.String("pipeline", claims.PipelineID),
+			slog.Any("error", err),
+		)
+		claims.Scope = scope.Untrusted()
+	} else {
+		claims.Scope = scope.PullRequestNumber(mr.IID, mr.TargetBranch, claims.Actor)
+	}
+	return Verified{Forge: verified.Forge, Claims: claims}
+}
+
+func orDefault(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 // identityFor checks the repository allowlist and resolves what the job may do.

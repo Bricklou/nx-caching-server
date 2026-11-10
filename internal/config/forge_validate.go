@@ -44,6 +44,15 @@ func (f Forge) validate(opts ValidateOptions) []error {
 		}
 	}
 
+	if f.APIURL != "" {
+		if f.Type != ForgeTypeGitlab {
+			errs = append(errs, fmt.Errorf("api_url is only used by %s forges, not %q", ForgeTypeGitlab, f.Type))
+		}
+		if err := validateURL(f.APIURL, opts.AllowInsecureIssuer); err != nil {
+			errs = append(errs, fmt.Errorf("api_url %w", err))
+		}
+	}
+
 	if len(f.Repos) == 0 {
 		errs = append(errs, errors.New("at least one repository is required"))
 	}

@@ -125,7 +125,7 @@ func exchanged(t *testing.T, tf *oidctest.Forge, ttl time.Duration) (*Manager, *
 	now := func() time.Time { return clock }
 	m := New(oidc.NewVerifier(tf.Config(), oidc.WithClock(now)), ttl, testSecret, WithClock(now))
 
-	session, err := m.Exchange(t.Context(), tf.Token(t, nil))
+	session, err := m.Exchange(t.Context(), tf.Token(t, nil), "")
 	if err != nil {
 		t.Fatalf("Exchange: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestSessionOutlivesTheForgeToken(t *testing.T) {
 	verifier := oidc.NewVerifier(tf.Config(), oidc.WithClock(now))
 	m := New(verifier, 2*time.Hour, testSecret, WithClock(now))
 	forgeToken := tf.Token(t, nil)
-	session, err := m.Exchange(t.Context(), forgeToken)
+	session, err := m.Exchange(t.Context(), forgeToken, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestExchangeRefusesWhatTheCacheWouldRefuse(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := m.Exchange(t.Context(), tt.raw); !errors.Is(err, tt.want) {
+			if _, err := m.Exchange(t.Context(), tt.raw, ""); !errors.Is(err, tt.want) {
 				t.Errorf("error = %v, want %v", err, tt.want)
 			}
 		})
@@ -208,7 +208,7 @@ func TestExchangeRefusesAnExpiredForgeToken(t *testing.T) {
 
 	clock = clock.Add(time.Hour)
 
-	if _, err := m.Exchange(t.Context(), raw); err == nil {
+	if _, err := m.Exchange(t.Context(), raw, ""); err == nil {
 		t.Error("an expired forge token was exchanged")
 	}
 }
@@ -217,7 +217,7 @@ func TestASessionCannotBeExchangedForAnotherOne(t *testing.T) {
 	tf := oidctest.New(t)
 	m, _, session := exchanged(t, tf, time.Hour)
 
-	if _, err := m.Exchange(t.Context(), session.Token); err == nil {
+	if _, err := m.Exchange(t.Context(), session.Token, ""); err == nil {
 		t.Error("a session token was exchanged, which would let it renew itself forever")
 	}
 }
@@ -254,5 +254,73 @@ func TestSessionWithAnotherSecretIsRefused(t *testing.T) {
 
 	if _, err := authenticate(t, other, session.Token); !errors.Is(err, ErrInvalid) {
 		t.Errorf("error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestExchangeWithAJobTokenKeepsTheMergeRequestGitLabReported(t *testing.T) {
+	tf := oidctest.New(t)
+	api := oidctest.NewGitLabAPI(t)
+	api.AddMergeRequest(oidctest.RepoID, "700", 12, "feature/x", "release/1.0")
+	api.AddMergeRequest(oidctest.RepoID, "701", 13, "feature/x", "main")
+	cfg := tf.ConfigOfType(config.ForgeTypeGitlab)
+	cfg.Forges[0].APIURL = api.URL
+	m := New(oidc.NewVerifier(cfg), time.Hour, testSecret)
+	token := func(pipeline string) string {
+		raw, err := tf.MintGitLab(devforge.GitLabToken{
+			Audience: oidctest.Audience, ProjectID: oidctest.RepoID, ProjectPath: oidctest.RepoPath,
+			Ref: "feature/x", PipelineSource: "merge_request_event", PipelineID: pipeline, UserLogin: "louis",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+
+	first, err := m.Exchange(t.Context(), token("700"), oidctest.GitLabJobToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := m.Exchange(t.Context(), token("701"), oidctest.GitLabJobToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterExchange := api.Calls.Load()
+
+	a, errA := authenticate(t, m, first.Token)
+	b, errB := authenticate(t, m, second.Token)
+
+	if errA != nil || errB != nil || a.Access.WriteScope != "pr-12" || b.Access.WriteScope != "pr-13" {
+		t.Errorf("got (%+v, %v) and (%+v, %v), want the scopes pr-12 and pr-13", a, errA, b, errB)
+	}
+	if got := api.Calls.Load() - afterExchange; got != 0 {
+		t.Errorf("using the sessions sent %d requests to GitLab", got)
+	}
+}
+
+func TestExchangeWithoutAJobTokenKeepsTheSourceBranchScope(t *testing.T) {
+	tf := oidctest.New(t)
+	api := oidctest.NewGitLabAPI(t)
+	cfg := tf.ConfigOfType(config.ForgeTypeGitlab)
+	cfg.Forges[0].APIURL = api.URL
+	m := New(oidc.NewVerifier(cfg), time.Hour, testSecret)
+	raw, err := tf.MintGitLab(devforge.GitLabToken{
+		Audience: oidctest.Audience, ProjectID: oidctest.RepoID, ProjectPath: oidctest.RepoPath,
+		Ref: "feature/x", PipelineSource: "merge_request_event", PipelineID: "700", UserLogin: "louis",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := m.Exchange(t.Context(), raw, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := authenticate(t, m, session.Token)
+
+	if err != nil || !strings.HasPrefix(id.Access.WriteScope, "pr-b") {
+		t.Errorf("got (%+v, %v)", id, err)
+	}
+	if api.Calls.Load() != 0 {
+		t.Error("GitLab was called without a job token")
 	}
 }

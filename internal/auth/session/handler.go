@@ -11,8 +11,12 @@ import (
 	"nx-caching-server/internal/auth"
 )
 
+// jobTokenHeader carries the CI_JOB_TOKEN of a GitLab job, the same header name GitLab uses.
+const jobTokenHeader = "Job-Token"
+
 // Handler answers POST requests carrying a forge token in the Authorization
-// header with a session token. A session token cannot be exchanged again.
+// header with a session token. A session token cannot be exchanged again. A
+// Job-Token header is passed on to find the merge request of a GitLab job.
 func (m *Manager) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, ok := auth.BearerToken(r)
@@ -21,7 +25,7 @@ func (m *Manager) Handler() http.Handler {
 			return
 		}
 
-		session, err := m.Exchange(r.Context(), raw)
+		session, err := m.Exchange(r.Context(), raw, r.Header.Get(jobTokenHeader))
 		switch {
 		case auth.IsForbidden(err):
 			auth.Reject(w, r, http.StatusForbidden, auth.MessageForbidden, "token not allowed", err)

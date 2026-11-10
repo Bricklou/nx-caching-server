@@ -13,6 +13,7 @@ import (
 
 	"nx-caching-server/internal/auth"
 	"nx-caching-server/internal/auth/oidc"
+	"nx-caching-server/internal/auth/oidc/oidctest"
 	"nx-caching-server/internal/auth/session"
 	"nx-caching-server/internal/config"
 	"nx-caching-server/internal/devforge"
@@ -426,4 +427,63 @@ func newAuthenticatedHandler(t *testing.T, cfg *config.AuthConfig) http.Handler 
 		Authenticator: auth.Chain(verifier, sessions),
 		Sessions:      sessions,
 	})
+}
+
+// doWithHeader is do with one more request header.
+func (h *harness) doWithHeader(method, path, token, headerName, headerValue string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set(headerName, headerValue)
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, req)
+	return w
+}
+
+func TestGitLabJobTokenGivesEachMergeRequestItsOwnScope(t *testing.T) {
+	api := oidctest.NewGitLabAPI(t)
+	api.AddMergeRequest(repoID, "700", 12, "feature/x", "main")
+	api.AddMergeRequest(repoID, "701", 13, "feature/x", "main")
+
+	forge, err := devforge.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = forge.Close() })
+	cfg := &config.AuthConfig{Forges: []config.Forge{{
+		Name: "gitlab", Type: config.ForgeTypeGitlab, Issuer: forge.Issuer(), Audience: audience, APIURL: api.URL,
+		Repos: []config.Repository{{ID: repoID, Name: repoPath, DefaultBranch: "main"}},
+	}}}
+	h := &harness{t: t, handler: newAuthenticatedHandler(t, cfg), forge: forge, forgeType: config.ForgeTypeGitlab}
+
+	mergeRequestToken := func(pipeline string) string {
+		raw, err := forge.MintGitLab(devforge.GitLabToken{
+			Audience: audience, ProjectID: repoID, ProjectPath: repoPath, Ref: "feature/x",
+			PipelineSource: "merge_request_event", PipelineID: pipeline, UserLogin: "louis",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	exchange := func(pipeline string) string {
+		w := h.doWithHeader("POST", "/v1/auth/session", mergeRequestToken(pipeline), "Job-Token", oidctest.GitLabJobToken)
+		var body struct {
+			Token string `json:"token"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != http.StatusOK {
+			t.Fatalf("exchange: %d %q", w.Code, w.Body.String())
+		}
+		return body.Token
+	}
+	first, second := exchange("700"), exchange("701")
+
+	if w := h.do("PUT", "/v1/cache/abc", first, "from mr 12"); w.Code != http.StatusOK {
+		t.Fatalf("upload: %d", w.Code)
+	}
+	if w := h.do("GET", "/v1/cache/abc", first, ""); w.Code != http.StatusOK || w.Body.String() != "from mr 12" {
+		t.Errorf("the merge request does not read its own entry: %d %q", w.Code, w.Body.String())
+	}
+	if w := h.do("GET", "/v1/cache/abc", second, ""); w.Code != http.StatusNotFound {
+		t.Errorf("another merge request of the same branch sees the entry: %d, want 404", w.Code)
+	}
 }

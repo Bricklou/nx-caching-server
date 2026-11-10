@@ -90,6 +90,7 @@ type GitLabToken struct {
 	RefType        string // branch or tag, branch when empty
 	Protected      bool
 	PipelineSource string // push, merge_request_event, schedule, ...
+	PipelineID     string // "1" when empty
 	UserLogin      string
 	UserID         string
 	Now            time.Time
@@ -114,7 +115,7 @@ func (s *Signer) MintGitLab(t GitLabToken) (string, error) {
 		"namespace_path":  t.NamespacePath,
 		"user_id":         t.UserID,
 		"user_login":      t.UserLogin,
-		"pipeline_id":     "1",
+		"pipeline_id":     orDefault(t.PipelineID, "1"),
 		"pipeline_source": t.PipelineSource,
 		"job_id":          "1",
 		"ref":             t.Ref,

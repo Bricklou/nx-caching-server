@@ -16,11 +16,13 @@ type gitlabClaims struct {
 	Ref            string     `json:"ref"`
 	RefType        string     `json:"ref_type"`
 	PipelineSource string     `json:"pipeline_source"`
+	PipelineID     flexString `json:"pipeline_id"`
 	UserLogin      string     `json:"user_login"`
 }
 
 // gitlabAdapter reads ref as a plain branch name. A merge request has no number
 // or target claim, and its project_id is the source project, so a fork fails the allowlist.
+// Do not read job_project_id instead: it is the parent of a fork, which would let a fork in.
 func gitlabAdapter(payload []byte) (Claims, error) {
 	var raw gitlabClaims
 	if err := json.Unmarshal(payload, &raw); err != nil {
@@ -49,6 +51,7 @@ func gitlabAdapter(payload []byte) (Claims, error) {
 	case "merge_request_event":
 		// ref is the source branch of the merge request.
 		claims.Scope = scope.PullRequestBranch(raw.Ref, "", raw.UserLogin)
+		claims.PipelineID = string(raw.PipelineID)
 	}
 
 	return claims, nil

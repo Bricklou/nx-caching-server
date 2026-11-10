@@ -58,7 +58,9 @@ type Job struct {
 	RepoPath  string // owner/name
 	Actor     string
 	Protected bool // gitlab and forgejo
-	TTL       time.Duration
+	// PipelineID is the pipeline of the job (gitlab), "1" when empty.
+	PipelineID string
+	TTL        time.Duration
 }
 
 // scenarioMinters maps a forge type to the function building its tokens.
@@ -101,7 +103,7 @@ func githubScenario(s *Signer, sc Scenario, job Job) (string, error) {
 func gitlabScenario(s *Signer, sc Scenario, job Job) (string, error) {
 	token := GitLabToken{
 		Audience: job.Audience, ProjectID: job.RepoID, ProjectPath: job.RepoPath, NamespacePath: ownerOf(job.RepoPath),
-		NamespaceID: "1", UserLogin: job.Actor, UserID: "1", Protected: job.Protected, TTL: job.TTL,
+		PipelineID: job.PipelineID, NamespaceID: "1", UserLogin: job.Actor, UserID: "1", Protected: job.Protected, TTL: job.TTL,
 		Ref: sc.Branch, PipelineSource: "push",
 	}
 
