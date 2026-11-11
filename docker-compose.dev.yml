@@ -1,7 +1,7 @@
 # S3 compatible storage for local development: `mise run s3:up`, then `mise run s3:init` once.
 services:
   garage:
-    image: dxflrs/garage:v2.5.0
+    image: dxflrs/garage:v2.5.0@sha256:677e5b758e4425a325b811c425c026bf35a4bf42f7ddbaa773de3f4fd779a5a5
     ports:
       - "127.0.0.1:3910:3900"
     volumes:
